@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 import sys
+import operator
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 
@@ -136,6 +137,51 @@ class Program:
 # Parser
 # -----------------------------------------------------------------------------
 REL_OPS = {"==", "!=", ">", "<=", "<", ">="}
+BINARY_OPS = {"add", "sub", "and", "or"}
+BINARY_FNS = {
+    "add": operator.add,
+    "sub": operator.sub,
+    "and": operator.and_,
+    "or": operator.or_,
+}
+BINOP_TO_ASM = {"add": "ADD", "sub": "SUB", "and": "AND", "or": "OR"}
+RELOP_FALSE_BRANCH = {
+    "==": ("SUB   r3, r1, r2", "BNZ"),
+    "!=": ("SUB   r3, r1, r2", "BEZ"),
+    "<": ("SLT   r3, r1, r2", "BEZ"),
+    ">": ("SLT   r3, r2, r1", "BEZ"),
+    "<=": ("SLT   r3, r2, r1", "BNZ"),
+    ">=": ("SLT   r3, r1, r2", "BNZ"),
+}
+
+
+def eval_binary(op: str, left: int, right: int) -> int:
+    fn = BINARY_FNS.get(op)
+    if fn is None:
+        raise ValueError(f"Unsupported binary operator: {op}")
+    return fn(left, right)
+
+
+def const_eval_expr(expr: Optional["Expr"]) -> Optional[int]:
+    if expr is None:
+        return None
+    if expr.kind == "num":
+        return expr.value
+    if expr.kind in BINARY_OPS:
+        left = const_eval_expr(expr.left)
+        right = const_eval_expr(expr.right)
+        if left is None or right is None:
+            return None
+        return eval_binary(expr.kind, left, right)
+    return None
+
+
+def label_with_offset(label: str, offset: int) -> str:
+    if offset == 0:
+        return label
+    if offset > 0:
+        return f"{label}+{offset}"
+    return f"{label}{offset}"
 
 
 class Parser:
@@ -510,35 +556,7 @@ class IRGen:
         self.instrs.append(instr)
 
     def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
-        if expr is None:
-            return None
-        if expr.kind == "num":
-            return expr.value
-        if expr.kind in ("add", "sub", "and", "or"):
-            left = self.const_eval(expr.left)
-            right = self.const_eval(expr.right)
-            if left is None or right is None:
-                return None
-            if expr.kind == "add":
-                return left + right
-            if expr.kind == "sub":
-                return left - right
-            if expr.kind == "and":
-                return left & right
-            if expr.kind == "or":
-                return left | right
-        return None
-
-    def fold_binop(self, op: str, left: int, right: int) -> int:
-        if op == "add":
-            return left + right
-        if op == "sub":
-            return left - right
-        if op == "and":
-            return left & right
-        if op == "or":
-            return left | right
-        raise ValueError(f"Unsupported binary operator: {op}")
+        return const_eval_expr(expr)
 
     def emit_expr(self, expr: Expr) -> IRValue:
         # General expression lowering returns a reusable value. Complex
@@ -559,11 +577,11 @@ class IRGen:
         if expr.kind == "call":
             return self.emit_call(expr)
 
-        if expr.kind in ("add", "sub", "and", "or"):
+        if expr.kind in BINARY_OPS:
             left = self.emit_expr(expr.left)
             right = self.emit_expr(expr.right)
             if isinstance(left, int) and isinstance(right, int):
-                return self.fold_binop(expr.kind, left, right)
+                return eval_binary(expr.kind, left, right)
             dst = self.new_temp()
             self.emit(IRInstr(op="bin", dst=dst, binop=expr.kind, left=left, right=right))
             return dst
@@ -636,11 +654,11 @@ class IRGen:
                 self.emit(IRInstr(op="store", name=dst, src=value))
             return
 
-        if expr.kind in ("add", "sub", "and", "or"):
+        if expr.kind in BINARY_OPS:
             left = self.emit_expr(expr.left)
             right = self.emit_expr(expr.right)
             if isinstance(left, int) and isinstance(right, int):
-                self.emit(IRInstr(op="store", name=dst, src=self.fold_binop(expr.kind, left, right)))
+                self.emit(IRInstr(op="store", name=dst, src=eval_binary(expr.kind, left, right)))
                 return
             self.emit(IRInstr(op="bin", dst=dst, binop=expr.kind, left=left, right=right))
             return
@@ -841,9 +859,16 @@ class CodeGen:
         return self.addr_helpers[target_label]
 
     def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
-        if expr is None:
-            return None
-        return IRGen(self.prog).const_eval(expr)
+        return const_eval_expr(expr)
+
+    def require_fields(self, instr: IRInstr, *fields: str) -> List[object]:
+        values: List[object] = []
+        for field in fields:
+            value = getattr(instr, field)
+            if value is None:
+                raise ValueError(f"Malformed {instr.op} instruction")
+            values.append(value)
+        return values
 
     def collect_decl(self, fn_name: str, local_map: Dict[str, SymbolInfo], d: VarDecl) -> None:
         if d.name in local_map:
@@ -998,12 +1023,7 @@ class CodeGen:
             raise ValueError(f"'{name}' is not an array")
 
         if isinstance(index, int):
-            if index == 0:
-                self.emit(f"    LD    {target}, {info.label}(r0)")
-            elif index > 0:
-                self.emit(f"    LD    {target}, {info.label}+{index}(r0)")
-            else:
-                self.emit(f"    LD    {target}, {info.label}{index}(r0)")
+            self.emit(f"    LD    {target}, {label_with_offset(info.label, index)}(r0)")
             return
 
         self.emit_array_index_address_value(fn, name, index, "r4")
@@ -1016,12 +1036,7 @@ class CodeGen:
 
         if isinstance(index, int):
             self.emit_load_operand(fn, value, "r3")
-            if index == 0:
-                self.emit(f"    ST    r3, {info.label}(r0)")
-            elif index > 0:
-                self.emit(f"    ST    r3, {info.label}+{index}(r0)")
-            else:
-                self.emit(f"    ST    r3, {info.label}{index}(r0)")
+            self.emit(f"    ST    r3, {label_with_offset(info.label, index)}(r0)")
             return
 
         self.emit_array_index_address_value(fn, name, index, "r4")
@@ -1029,15 +1044,7 @@ class CodeGen:
         self.emit("    ST    r3, 0(r4)")
 
     def emit_relop_false_jump(self, op: str, false_label: str) -> None:
-        relop_to_emit = {
-            "==": ("SUB   r3, r1, r2", "BNZ"),
-            "!=": ("SUB   r3, r1, r2", "BEZ"),
-            "<": ("SLT   r3, r1, r2", "BEZ"),
-            ">": ("SLT   r3, r2, r1", "BEZ"),
-            "<=": ("SLT   r3, r2, r1", "BNZ"),
-            ">=": ("SLT   r3, r1, r2", "BNZ"),
-        }
-        op_info = relop_to_emit.get(op)
+        op_info = RELOP_FALSE_BRANCH.get(op)
         if op_info is None:
             raise ValueError(f"Unsupported relational operator: {op}")
         compare_instr, branch_instr = op_info
@@ -1073,56 +1080,44 @@ class CodeGen:
 
     def emit_ir_instr(self, fn: str, instr: IRInstr, is_main: bool) -> None:
         if instr.op == "const":
-            if instr.dst is None or instr.src is None:
-                raise ValueError("Malformed const instruction")
-            self.emit_store_operand(fn, instr.dst, instr.src)
+            dst, src = self.require_fields(instr, "dst", "src")
+            self.emit_store_operand(fn, dst, src)
             return
 
         if instr.op == "store":
-            if instr.name is None or instr.src is None:
-                raise ValueError("Malformed store instruction")
-            self.emit_store_operand(fn, instr.name, instr.src)
+            name, src = self.require_fields(instr, "name", "src")
+            self.emit_store_operand(fn, name, src)
             return
 
         if instr.op == "bin":
-            if instr.dst is None or instr.binop is None or instr.left is None or instr.right is None:
-                raise ValueError("Malformed binary instruction")
-            self.emit_load_operand(fn, instr.left, "r1")
-            self.emit_load_operand(fn, instr.right, "r2")
-            if instr.binop == "add":
-                self.emit("    ADD   r3, r1, r2")
-            elif instr.binop == "sub":
-                self.emit("    SUB   r3, r1, r2")
-            elif instr.binop == "and":
-                self.emit("    AND   r3, r1, r2")
-            elif instr.binop == "or":
-                self.emit("    OR    r3, r1, r2")
-            else:
-                raise ValueError(f"Unsupported binary operator: {instr.binop}")
-            self.emit_store_scalar(fn, instr.dst, "r3")
+            dst, binop, left, right = self.require_fields(instr, "dst", "binop", "left", "right")
+            self.emit_load_operand(fn, left, "r1")
+            self.emit_load_operand(fn, right, "r2")
+            asm_op = BINOP_TO_ASM.get(binop)
+            if asm_op is None:
+                raise ValueError(f"Unsupported binary operator: {binop}")
+            self.emit(f"    {asm_op:<5} r3, r1, r2")
+            self.emit_store_scalar(fn, dst, "r3")
             return
 
         if instr.op == "load_array":
-            if instr.dst is None or instr.name is None or instr.index is None:
-                raise ValueError("Malformed load_array instruction")
-            self.emit_load_array_elem_value(fn, instr.name, instr.index, "r3")
-            self.emit_store_scalar(fn, instr.dst, "r3")
+            dst, name, index = self.require_fields(instr, "dst", "name", "index")
+            self.emit_load_array_elem_value(fn, name, index, "r3")
+            self.emit_store_scalar(fn, dst, "r3")
             return
 
         if instr.op == "store_array":
-            if instr.name is None or instr.index is None or instr.src is None:
-                raise ValueError("Malformed store_array instruction")
-            self.emit_store_array_elem_value(fn, instr.name, instr.index, instr.src)
+            name, index, src = self.require_fields(instr, "name", "index", "src")
+            self.emit_store_array_elem_value(fn, name, index, src)
             return
 
         if instr.op == "addr":
-            if instr.dst is None or instr.name is None:
-                raise ValueError("Malformed addr instruction")
+            dst, name = self.require_fields(instr, "dst", "name")
             if instr.index is None:
-                self.emit_load_address_of_scalar(fn, instr.name, "r3")
+                self.emit_load_address_of_scalar(fn, name, "r3")
             else:
-                self.emit_array_index_address_value(fn, instr.name, instr.index, "r3")
-            self.emit_store_scalar(fn, instr.dst, "r3")
+                self.emit_array_index_address_value(fn, name, instr.index, "r3")
+            self.emit_store_scalar(fn, dst, "r3")
             return
 
         if instr.op == "call":
@@ -1130,23 +1125,20 @@ class CodeGen:
             return
 
         if instr.op == "jump_false":
-            if instr.left is None or instr.right is None or instr.cond_op is None or instr.label is None:
-                raise ValueError("Malformed jump_false instruction")
-            self.emit_load_operand(fn, instr.left, "r1")
-            self.emit_load_operand(fn, instr.right, "r2")
-            self.emit_relop_false_jump(instr.cond_op, instr.label)
+            left, right, cond_op, label = self.require_fields(instr, "left", "right", "cond_op", "label")
+            self.emit_load_operand(fn, left, "r1")
+            self.emit_load_operand(fn, right, "r2")
+            self.emit_relop_false_jump(cond_op, label)
             return
 
         if instr.op == "jump":
-            if instr.label is None:
-                raise ValueError("Malformed jump instruction")
-            self.emit(f"    BEZ   r0, {instr.label}")
+            label = self.require_fields(instr, "label")[0]
+            self.emit(f"    BEZ   r0, {label}")
             return
 
         if instr.op == "label":
-            if instr.label is None:
-                raise ValueError("Malformed label instruction")
-            self.emit(f"{instr.label}:")
+            label = self.require_fields(instr, "label")[0]
+            self.emit(f"{label}:")
             return
 
         if instr.op == "return":
