@@ -729,6 +729,22 @@ class CodeGen:
         self.emit(f"    LD    r5, {helper}(r0)")
         self.emit(f"    ADD   {target}, r5, r2")
 
+    def emit_relop_false_jump(self, op: str, false_label: str) -> None:
+        relop_to_emit = {
+            "==": ("SUB   r3, r1, r2", "BNZ"),
+            "!=": ("SUB   r3, r1, r2", "BEZ"),
+            "<": ("SLT   r3, r1, r2", "BEZ"),
+            ">": ("SLT   r3, r2, r1", "BEZ"),
+            "<=": ("SLT   r3, r2, r1", "BNZ"),
+            ">=": ("SLT   r3, r1, r2", "BNZ"),
+        }
+        op_info = relop_to_emit.get(op)
+        if op_info is None:
+            raise ValueError(f"Unsupported relational operator: {op}")
+        compare_instr, branch_instr = op_info
+        self.emit(f"    {compare_instr}")
+        self.emit(f"    {branch_instr}   r3, {false_label}")
+
     def emit_load_array_elem(self, fn: str, name: str, index_expr: Expr, target: str) -> None:
         info = self.lookup_symbol(fn, name)
         if info.kind != "array":
@@ -870,37 +886,7 @@ class CodeGen:
             tmp = self.fn_tmp_label(fn)
             self.emit(f"    LD    r1, {tmp}(r0)")
 
-        if cond.op == "==":
-            self.emit("    SUB   r3, r1, r2")
-            self.emit(f"    BNZ   r3, {false_label}")
-            return
-
-        if cond.op == "!=":
-            self.emit("    SUB   r3, r1, r2")
-            self.emit(f"    BEZ   r3, {false_label}")
-            return
-
-        if cond.op == "<":
-            self.emit("    SLT   r3, r1, r2")
-            self.emit(f"    BEZ   r3, {false_label}")
-            return
-
-        if cond.op == ">":
-            self.emit("    SLT   r3, r2, r1")
-            self.emit(f"    BEZ   r3, {false_label}")
-            return
-
-        if cond.op == "<=":
-            self.emit("    SLT   r3, r2, r1")
-            self.emit(f"    BNZ   r3, {false_label}")
-            return
-
-        if cond.op == ">=":
-            self.emit("    SLT   r3, r1, r2")
-            self.emit(f"    BNZ   r3, {false_label}")
-            return
-
-        raise ValueError(f"Unsupported relational operator: {cond.op}")
+        self.emit_relop_false_jump(cond.op, false_label)
 
     def emit_stmt(self, fn: str, st: Stmt, is_main: bool) -> None:
         if st.kind == "decl":
