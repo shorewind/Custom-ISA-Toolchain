@@ -467,6 +467,7 @@ class CodeGen:
         self.global_symbols: Dict[str, SymbolInfo] = {}
         self.func_symbols: Dict[str, Dict[str, SymbolInfo]] = {}
         self.func_params: Dict[str, List[Param]] = {}
+        self.func_by_name: Dict[str, Function] = {}
 
         # Data layout entries in emission order.
         self.data_entries: List[tuple[str, int | str]] = []
@@ -627,6 +628,7 @@ class CodeGen:
         for fn in self.prog.functions:
             if fn.name in self.func_symbols:
                 raise NameError(f"Duplicate function: {fn.name}")
+            self.func_by_name[fn.name] = fn
             local_map: Dict[str, SymbolInfo] = {}
             self.func_symbols[fn.name] = local_map
             self.func_params[fn.name] = fn.params
@@ -745,6 +747,15 @@ class CodeGen:
         self.emit(f"    {compare_instr}")
         self.emit(f"    {branch_instr}   r3, {false_label}")
 
+    def emit_expr_with_saved_left(self, fn: str, right_expr: Expr) -> None:
+        if self.expr_contains_call(right_expr):
+            tmp = self.fn_tmp_label(fn)
+            self.emit(f"    ST    r1, {tmp}(r0)")
+        self.emit_expr(fn, right_expr, "r2")
+        if self.expr_contains_call(right_expr):
+            tmp = self.fn_tmp_label(fn)
+            self.emit(f"    LD    r1, {tmp}(r0)")
+
     def emit_load_array_elem(self, fn: str, name: str, index_expr: Expr, target: str) -> None:
         info = self.lookup_symbol(fn, name)
         if info.kind != "array":
@@ -793,11 +804,7 @@ class CodeGen:
 
     def emit_call(self, fn: str, call_expr: Expr, target: str) -> None:
         callee = call_expr.name or ""
-        callee_fn = None
-        for f in self.prog.functions:
-            if f.name == callee:
-                callee_fn = f
-                break
+        callee_fn = self.func_by_name.get(callee)
         if callee_fn is None:
             raise NameError(f"Unknown function: {callee}")
 
@@ -853,13 +860,7 @@ class CodeGen:
 
         if expr.kind in ("add", "sub", "and", "or"):
             self.emit_expr(fn, expr.left, "r1")
-            if self.expr_contains_call(expr.right):
-                tmp = self.fn_tmp_label(fn)
-                self.emit(f"    ST    r1, {tmp}(r0)")
-            self.emit_expr(fn, expr.right, "r2")
-            if self.expr_contains_call(expr.right):
-                tmp = self.fn_tmp_label(fn)
-                self.emit(f"    LD    r1, {tmp}(r0)")
+            self.emit_expr_with_saved_left(fn, expr.right)
 
             if expr.kind == "add":
                 self.emit("    ADD   r3, r1, r2")
