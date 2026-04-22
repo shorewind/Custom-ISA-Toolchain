@@ -37,7 +37,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 
 # -----------------------------------------------------------------------------
@@ -445,6 +445,343 @@ class Parser:
 
 
 # -----------------------------------------------------------------------------
+# TACKY-style IR
+# -----------------------------------------------------------------------------
+# IR values are intentionally tiny: either an integer constant or the name of a
+# scalar slot. Arrays and calls become explicit IR instructions so codegen never
+# has to recursively evaluate a complex AST while holding live registers.
+IRValue = Union[int, str]
+
+
+@dataclass
+class IRInstr:
+    op: str
+    dst: Optional[str] = None
+    src: Optional[IRValue] = None
+    left: Optional[IRValue] = None
+    right: Optional[IRValue] = None
+    binop: Optional[str] = None
+    name: Optional[str] = None
+    index: Optional[IRValue] = None
+    label: Optional[str] = None
+    args: Optional[List[IRValue]] = None
+    cond_op: Optional[str] = None
+
+
+@dataclass
+class IRFunction:
+    name: str
+    instrs: List[IRInstr]
+    temps: List[str]
+
+
+@dataclass
+class IRProgram:
+    functions: List[IRFunction]
+
+
+class IRGen:
+    """Lower AST into simple three-address code before target assembly."""
+
+    def __init__(self, prog: Program) -> None:
+        self.prog = prog
+        self.func_by_name: Dict[str, Function] = {fn.name: fn for fn in prog.functions}
+        self.ir_functions: List[IRFunction] = []
+        self.instrs: List[IRInstr] = []
+        self.temps: List[str] = []
+        self.temp_counter = 0
+        self.label_counters: Dict[str, int] = {"if": 0, "while": 0, "for": 0}
+        self.current_fn = ""
+
+    def new_temp(self) -> str:
+        name = f"t{self.temp_counter}"
+        self.temp_counter += 1
+        self.temps.append(name)
+        return name
+
+    def new_struct_id(self, kind: str) -> int:
+        self.label_counters[kind] += 1
+        return self.label_counters[kind]
+
+    def label_name(self, kind: str, suffix: str, sid: int) -> str:
+        return f"{kind}_{suffix}_{sid}"
+
+    def emit(self, instr: IRInstr) -> None:
+        self.instrs.append(instr)
+
+    def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
+        if expr is None:
+            return None
+        if expr.kind == "num":
+            return expr.value
+        if expr.kind in ("add", "sub", "and", "or"):
+            left = self.const_eval(expr.left)
+            right = self.const_eval(expr.right)
+            if left is None or right is None:
+                return None
+            if expr.kind == "add":
+                return left + right
+            if expr.kind == "sub":
+                return left - right
+            if expr.kind == "and":
+                return left & right
+            if expr.kind == "or":
+                return left | right
+        return None
+
+    def fold_binop(self, op: str, left: int, right: int) -> int:
+        if op == "add":
+            return left + right
+        if op == "sub":
+            return left - right
+        if op == "and":
+            return left & right
+        if op == "or":
+            return left | right
+        raise ValueError(f"Unsupported binary operator: {op}")
+
+    def emit_expr(self, expr: Expr) -> IRValue:
+        # General expression lowering returns a reusable value. Complex
+        # expressions materialize into temporaries so later operations can reload
+        # them without depending on r1/r2/r3 surviving recursive codegen.
+        if expr.kind == "num":
+            return expr.value or 0
+
+        if expr.kind == "var":
+            return expr.name or ""
+
+        if expr.kind == "array":
+            index = self.emit_expr(expr.index)
+            dst = self.new_temp()
+            self.emit(IRInstr(op="load_array", dst=dst, name=expr.name, index=index))
+            return dst
+
+        if expr.kind == "call":
+            return self.emit_call(expr)
+
+        if expr.kind in ("add", "sub", "and", "or"):
+            left = self.emit_expr(expr.left)
+            right = self.emit_expr(expr.right)
+            if isinstance(left, int) and isinstance(right, int):
+                return self.fold_binop(expr.kind, left, right)
+            dst = self.new_temp()
+            self.emit(IRInstr(op="bin", dst=dst, binop=expr.kind, left=left, right=right))
+            return dst
+
+        raise ValueError(f"Unsupported expression kind: {expr.kind}")
+
+    def emit_lvalue_address(self, expr: Expr, callee: str, param_name: str) -> IRValue:
+        if expr.kind == "var":
+            dst = self.new_temp()
+            self.emit(IRInstr(op="addr", dst=dst, name=expr.name))
+            return dst
+
+        if expr.kind == "array":
+            index = self.emit_expr(expr.index)
+            dst = self.new_temp()
+            self.emit(IRInstr(op="addr", dst=dst, name=expr.name, index=index))
+            return dst
+
+        raise SyntaxError(
+            f"By-reference parameter '{param_name}' in call to '{callee}' requires an lvalue"
+        )
+
+    def emit_call(self, call_expr: Expr) -> IRValue:
+        callee = call_expr.name or ""
+        callee_fn = self.func_by_name.get(callee)
+        if callee_fn is None:
+            raise NameError(f"Unknown function: {callee}")
+
+        args = call_expr.args or []
+        if len(args) != len(callee_fn.params):
+            raise SyntaxError(
+                f"Function '{callee}' expects {len(callee_fn.params)} arg(s), got {len(args)}"
+            )
+
+        lowered_args: List[IRValue] = []
+        for p, a in zip(callee_fn.params, args):
+            if p.by_ref:
+                # A by-reference argument is lowered to the address of an
+                # lvalue; the callee's param_ref slot stores that address.
+                lowered_args.append(self.emit_lvalue_address(a, callee, p.name))
+            else:
+                lowered_args.append(self.emit_expr(a))
+
+        dst = self.new_temp()
+        self.emit(IRInstr(op="call", dst=dst, name=callee, args=lowered_args))
+        return dst
+
+    def emit_expr_to(self, expr: Expr, dst: str) -> None:
+        """Lower an expression directly into a known scalar destination when safe."""
+        # This avoids pointless temps for simple code like "c = a + b" while
+        # still using emit_expr for nested subtrees that must be preserved.
+        if expr.kind == "num":
+            self.emit(IRInstr(op="store", name=dst, src=expr.value or 0))
+            return
+
+        if expr.kind == "var":
+            self.emit(IRInstr(op="store", name=dst, src=expr.name))
+            return
+
+        if expr.kind == "array":
+            index = self.emit_expr(expr.index)
+            self.emit(IRInstr(op="load_array", dst=dst, name=expr.name, index=index))
+            return
+
+        if expr.kind == "call":
+            value = self.emit_call(expr)
+            if isinstance(value, int):
+                self.emit(IRInstr(op="store", name=dst, src=value))
+            elif value != dst:
+                self.emit(IRInstr(op="store", name=dst, src=value))
+            return
+
+        if expr.kind in ("add", "sub", "and", "or"):
+            left = self.emit_expr(expr.left)
+            right = self.emit_expr(expr.right)
+            if isinstance(left, int) and isinstance(right, int):
+                self.emit(IRInstr(op="store", name=dst, src=self.fold_binop(expr.kind, left, right)))
+                return
+            self.emit(IRInstr(op="bin", dst=dst, binop=expr.kind, left=left, right=right))
+            return
+
+        raise ValueError(f"Unsupported expression kind: {expr.kind}")
+
+    def emit_condition_false_branch(self, cond: Cond, false_label: str) -> None:
+        left = self.emit_expr(cond.left)
+        right = self.emit_expr(cond.right or Expr(kind="num", value=0))
+        self.emit(IRInstr(op="jump_false", left=left, right=right, cond_op=cond.op, label=false_label))
+
+    def emit_stmt(self, st: Stmt) -> None:
+        if st.kind == "decl":
+            if st.decl is not None and st.decl.init is not None:
+                # main's constant local initializers are emitted directly into .data.
+                if self.current_fn == "main" and self.const_eval(st.decl.init) is not None:
+                    return
+                self.emit_expr_to(st.decl.init, st.decl.name)
+            return
+
+        if st.kind == "assign":
+            if st.assign is None:
+                return
+            if st.assign.target_index is None:
+                self.emit_expr_to(st.assign.expr, st.assign.target_name)
+            else:
+                # For stores through computed addresses, preserve the RHS first;
+                # address calculation is allowed to use the normal scratch regs.
+                value = self.emit_expr(st.assign.expr)
+                index = self.emit_expr(st.assign.target_index)
+                self.emit(IRInstr(op="store_array", name=st.assign.target_name, index=index, src=value))
+            return
+
+        if st.kind == "expr":
+            if st.expr is not None:
+                self.emit_expr(st.expr)
+            return
+
+        if st.kind == "block":
+            for inner in st.body or []:
+                self.emit_stmt(inner)
+            return
+
+        if st.kind == "if":
+            sid = self.new_struct_id("if")
+            else_label = self.label_name("if", "else", sid)
+            end_label = self.label_name("if", "end", sid)
+            if st.cond is None:
+                raise ValueError("if missing condition")
+            self.emit_condition_false_branch(st.cond, else_label)
+            for inner in st.then_body or []:
+                self.emit_stmt(inner)
+            self.emit(IRInstr(op="jump", label=end_label))
+            self.emit(IRInstr(op="label", label=else_label))
+            for inner in st.else_body or []:
+                self.emit_stmt(inner)
+            self.emit(IRInstr(op="label", label=end_label))
+            return
+
+        if st.kind == "while":
+            sid = self.new_struct_id("while")
+            start_label = self.label_name("while", "start", sid)
+            end_label = self.label_name("while", "end", sid)
+            self.emit(IRInstr(op="label", label=start_label))
+            if st.cond is None:
+                raise ValueError("while missing condition")
+            self.emit_condition_false_branch(st.cond, end_label)
+            for inner in st.body or []:
+                self.emit_stmt(inner)
+            self.emit(IRInstr(op="jump", label=start_label))
+            self.emit(IRInstr(op="label", label=end_label))
+            return
+
+        if st.kind == "for":
+            if st.init is not None:
+                self.emit_stmt(st.init)
+
+            sid = self.new_struct_id("for")
+            start_label = self.label_name("for", "start", sid)
+            end_label = self.label_name("for", "end", sid)
+            self.emit(IRInstr(op="label", label=start_label))
+            if st.cond is not None:
+                self.emit_condition_false_branch(st.cond, end_label)
+
+            for inner in st.body or []:
+                self.emit_stmt(inner)
+
+            if st.update is not None:
+                self.emit_stmt(st.update)
+
+            self.emit(IRInstr(op="jump", label=start_label))
+            self.emit(IRInstr(op="label", label=end_label))
+            return
+
+        if st.kind == "return":
+            if st.expr is None:
+                raise ValueError("return requires expression")
+            value = self.emit_expr(st.expr)
+            self.emit(IRInstr(op="return", src=value))
+            return
+
+        raise ValueError(f"Unsupported statement kind: {st.kind}")
+
+    def stmt_guarantees_return(self, st: Stmt) -> bool:
+        if st.kind == "return":
+            return True
+        if st.kind == "block":
+            return self.block_guarantees_return(st.body or [])
+        if st.kind == "if":
+            then_body = st.then_body or []
+            else_body = st.else_body or []
+            if not then_body or not else_body:
+                return False
+            return self.block_guarantees_return(then_body) and self.block_guarantees_return(else_body)
+        return False
+
+    def block_guarantees_return(self, body: List[Stmt]) -> bool:
+        for st in body:
+            if self.stmt_guarantees_return(st):
+                return True
+        return False
+
+    def generate(self) -> IRProgram:
+        for fn in self.prog.functions:
+            self.current_fn = fn.name
+            self.instrs = []
+            self.temps = []
+            self.temp_counter = 0
+
+            for st in fn.body:
+                self.emit_stmt(st)
+
+            if not self.block_guarantees_return(fn.body):
+                self.emit(IRInstr(op="return", src=0))
+
+            self.ir_functions.append(IRFunction(name=fn.name, instrs=self.instrs, temps=self.temps))
+
+        return IRProgram(functions=self.ir_functions)
+
+
+# -----------------------------------------------------------------------------
 # Code generator
 # -----------------------------------------------------------------------------
 @dataclass
@@ -457,12 +794,9 @@ class SymbolInfo:
 class CodeGen:
     def __init__(self, prog: Program) -> None:
         self.prog = prog
+        self.ir_prog: Optional[IRProgram] = None
+        self.ir_by_name: Dict[str, IRFunction] = {}
         self.lines: List[str] = []
-        self.label_counters: Dict[str, int] = {
-            "if": 0,
-            "while": 0,
-            "for": 0,
-        }
 
         self.global_symbols: Dict[str, SymbolInfo] = {}
         self.func_symbols: Dict[str, Dict[str, SymbolInfo]] = {}
@@ -476,12 +810,7 @@ class CodeGen:
 
         # Label-address helpers for pointer math.
         self.addr_helpers: Dict[str, str] = {}
-        self.fn_needs_tmp: Dict[str, bool] = {}
         self.fn_needs_saved_r7: Dict[str, bool] = {}
-
-    def next_struct_id(self, struct_kind: str) -> int:
-        self.label_counters[struct_kind] += 1
-        return self.label_counters[struct_kind]
 
     def emit(self, s: str = "") -> None:
         self.lines.append(s)
@@ -514,107 +843,42 @@ class CodeGen:
     def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
         if expr is None:
             return None
-        if expr.kind == "num":
-            return expr.value
-        if expr.kind in ("add", "sub", "and", "or"):
-            left = self.const_eval(expr.left)
-            right = self.const_eval(expr.right)
-            if left is None or right is None:
-                return None
-            if expr.kind == "add":
-                return left + right
-            if expr.kind == "sub":
-                return left - right
-            if expr.kind == "and":
-                return left & right
-            if expr.kind == "or":
-                return left | right
-        return None
+        return IRGen(self.prog).const_eval(expr)
 
-    def expr_contains_call(self, expr: Optional[Expr]) -> bool:
-        if expr is None:
-            return False
-        if expr.kind == "call":
-            return True
-        if expr.kind in ("add", "sub", "and", "or"):
-            return self.expr_contains_call(expr.left) or self.expr_contains_call(expr.right)
-        if expr.kind == "array":
-            return self.expr_contains_call(expr.index)
-        if expr.kind in ("num", "var"):
-            return False
-        for a in expr.args or []:
-            if self.expr_contains_call(a):
-                return True
-        return False
+    def collect_decl(self, fn_name: str, local_map: Dict[str, SymbolInfo], d: VarDecl) -> None:
+        if d.name in local_map:
+            raise NameError(f"Duplicate local in {fn_name}: {d.name}")
+        lbl = f"{fn_name}_{d.name}"
+        if d.size == 1:
+            local_map[d.name] = SymbolInfo(kind="scalar", label=lbl, size=1)
+            self.add_data_word(lbl, 0)
+            if fn_name == "main":
+                k = self.const_eval(d.init)
+                if k is not None:
+                    self.set_data_word(lbl, k)
+        else:
+            local_map[d.name] = SymbolInfo(kind="array", label=lbl, size=d.size)
+            self.add_data_words(lbl, d.size, 0)
 
-    def stmt_contains_call(self, st: Stmt) -> bool:
-        if st.kind == "decl" and st.decl is not None:
-            return self.expr_contains_call(st.decl.init)
-        if st.kind == "assign" and st.assign is not None:
-            return self.expr_contains_call(st.assign.expr) or self.expr_contains_call(st.assign.target_index)
-        if st.kind == "expr":
-            return self.expr_contains_call(st.expr)
-        if st.kind == "return":
-            return self.expr_contains_call(st.expr)
-        if st.kind == "if":
-            c = st.cond
-            c_has = c is not None and (self.expr_contains_call(c.left) or self.expr_contains_call(c.right))
-            return c_has or any(self.stmt_contains_call(x) for x in (st.then_body or [])) or any(
-                self.stmt_contains_call(x) for x in (st.else_body or [])
-            )
-        if st.kind in ("while", "for"):
-            c = st.cond
-            c_has = c is not None and (self.expr_contains_call(c.left) or self.expr_contains_call(c.right))
-            init_has = st.init is not None and self.stmt_contains_call(st.init)
-            upd_has = st.update is not None and self.stmt_contains_call(st.update)
-            body_has = any(self.stmt_contains_call(x) for x in (st.body or []))
-            return c_has or init_has or upd_has or body_has
-        if st.kind == "block":
-            return any(self.stmt_contains_call(x) for x in (st.body or []))
-        return False
+    def collect_stmt_decls(self, fn_name: str, local_map: Dict[str, SymbolInfo], stmts: List[Stmt]) -> None:
+        for st in stmts:
+            if st.kind == "decl" and st.decl is not None:
+                self.collect_decl(fn_name, local_map, st.decl)
+            elif st.kind == "if":
+                self.collect_stmt_decls(fn_name, local_map, st.then_body or [])
+                self.collect_stmt_decls(fn_name, local_map, st.else_body or [])
+            elif st.kind == "while":
+                self.collect_stmt_decls(fn_name, local_map, st.body or [])
+            elif st.kind == "for":
+                if st.init is not None:
+                    self.collect_stmt_decls(fn_name, local_map, [st.init])
+                self.collect_stmt_decls(fn_name, local_map, st.body or [])
+            elif st.kind == "block":
+                self.collect_stmt_decls(fn_name, local_map, st.body or [])
 
-    def stmt_needs_tmp(self, st: Stmt) -> bool:
-        def expr_needs_tmp(e: Optional[Expr]) -> bool:
-            if e is None:
-                return False
-            if e.kind in ("add", "sub", "and", "or"):
-                if self.expr_contains_call(e.right):
-                    return True
-                return expr_needs_tmp(e.left) or expr_needs_tmp(e.right)
-            if e.kind == "array":
-                return expr_needs_tmp(e.index)
-            if e.kind == "call":
-                return any(expr_needs_tmp(a) for a in (e.args or []))
-            return False
+    def collect_symbols(self, ir_prog: IRProgram) -> None:
+        self.ir_by_name = {fn.name: fn for fn in ir_prog.functions}
 
-        if st.kind == "decl" and st.decl is not None:
-            return expr_needs_tmp(st.decl.init)
-        if st.kind == "assign" and st.assign is not None:
-            return expr_needs_tmp(st.assign.expr) or expr_needs_tmp(st.assign.target_index)
-        if st.kind == "expr":
-            return expr_needs_tmp(st.expr)
-        if st.kind == "return":
-            return expr_needs_tmp(st.expr)
-        if st.kind in ("if", "while", "for"):
-            c = st.cond
-            c_need = c is not None and (expr_needs_tmp(c.left) or expr_needs_tmp(c.right) or self.expr_contains_call(c.right))
-            init_need = st.init is not None and self.stmt_needs_tmp(st.init)
-            upd_need = st.update is not None and self.stmt_needs_tmp(st.update)
-            then_need = any(self.stmt_needs_tmp(x) for x in (st.then_body or []))
-            else_need = any(self.stmt_needs_tmp(x) for x in (st.else_body or []))
-            body_need = any(self.stmt_needs_tmp(x) for x in (st.body or []))
-            return c_need or init_need or upd_need or then_need or else_need or body_need
-        if st.kind == "block":
-            return any(self.stmt_needs_tmp(x) for x in (st.body or []))
-        return False
-
-    def fn_tmp_label(self, fn: str) -> str:
-        return f"{fn}_tmp"
-
-    def fn_saved_r7_label(self, fn: str) -> str:
-        return f"{fn}_saved_r7"
-
-    def collect_symbols(self) -> None:
         for g in self.prog.globals:
             if g.name in self.global_symbols:
                 raise NameError(f"Duplicate global: {g.name}")
@@ -632,10 +896,11 @@ class CodeGen:
             local_map: Dict[str, SymbolInfo] = {}
             self.func_symbols[fn.name] = local_map
             self.func_params[fn.name] = fn.params
-            self.fn_needs_saved_r7[fn.name] = fn.name != "main" and any(
-                self.stmt_contains_call(st) for st in fn.body
+
+            ir_fn = self.ir_by_name.get(fn.name)
+            self.fn_needs_saved_r7[fn.name] = fn.name != "main" and ir_fn is not None and any(
+                instr.op == "call" for instr in ir_fn.instrs
             )
-            self.fn_needs_tmp[fn.name] = any(self.stmt_needs_tmp(st) for st in fn.body)
 
             for p in fn.params:
                 if p.name in local_map:
@@ -649,37 +914,23 @@ class CodeGen:
                     local_map[p.name] = SymbolInfo(kind="param_val", label=slot, size=1)
                     self.add_data_word(slot, 0)
 
-            if self.fn_needs_tmp[fn.name]:
-                self.add_data_word(self.fn_tmp_label(fn.name), 0)
+            self.collect_stmt_decls(fn.name, local_map, fn.body)
+
+            if ir_fn is not None:
+                # Temps are explicit storage slots for now. This keeps the
+                # backend simple on an ISA without an exposed stack pointer;
+                # later register allocation can replace selected temp loads.
+                for temp in ir_fn.temps:
+                    if temp in local_map:
+                        raise NameError(f"Duplicate temporary in {fn.name}: {temp}")
+                    local_map[temp] = SymbolInfo(kind="scalar", label=f"{fn.name}_{temp}", size=1)
+                    self.add_data_word(f"{fn.name}_{temp}", 0)
+
             if self.fn_needs_saved_r7[fn.name]:
                 self.add_data_word(self.fn_saved_r7_label(fn.name), 0)
 
-            def walk(stmts: List[Stmt]) -> None:
-                for st in stmts:
-                    if st.kind == "decl" and st.decl is not None:
-                        d = st.decl
-                        if d.name in local_map:
-                            raise NameError(f"Duplicate local in {fn.name}: {d.name}")
-                        if d.size == 1:
-                            lbl = f"{fn.name}_{d.name}"
-                            local_map[d.name] = SymbolInfo(kind="scalar", label=lbl, size=1)
-                            self.add_data_word(lbl, 0)
-                            if fn.name == "main":
-                                k = self.const_eval(d.init)
-                                if k is not None:
-                                    self.set_data_word(lbl, k)
-                        else:
-                            lbl = f"{fn.name}_{d.name}"
-                            local_map[d.name] = SymbolInfo(kind="array", label=lbl, size=d.size)
-                            self.add_data_words(lbl, d.size, 0)
-
-                    if st.kind == "if":
-                        walk(st.then_body or [])
-                        walk(st.else_body or [])
-                    elif st.kind in ("while", "for", "block"):
-                        walk(st.body or [])
-
-            walk(fn.body)
+    def fn_saved_r7_label(self, fn: str) -> str:
+        return f"{fn}_saved_r7"
 
     def lookup_symbol(self, fn: str, name: str) -> SymbolInfo:
         if name in self.func_symbols.get(fn, {}):
@@ -710,6 +961,16 @@ class CodeGen:
             return
         raise ValueError(f"Cannot assign array variable '{name}' without index")
 
+    def emit_load_operand(self, fn: str, value: IRValue, target: str) -> None:
+        if isinstance(value, int):
+            self.emit(f"    LDI   {target}, {value}")
+            return
+        self.emit_load_scalar(fn, value, target)
+
+    def emit_store_operand(self, fn: str, name: str, value: IRValue) -> None:
+        self.emit_load_operand(fn, value, "r3")
+        self.emit_store_scalar(fn, name, "r3")
+
     def emit_load_address_of_scalar(self, fn: str, name: str, target: str) -> None:
         info = self.lookup_symbol(fn, name)
         if info.kind in ("scalar", "param_val"):
@@ -721,15 +982,51 @@ class CodeGen:
             return
         raise ValueError(f"Cannot take scalar address of array '{name}'")
 
-    def emit_array_index_address(self, fn: str, name: str, index_expr: Expr, target: str) -> None:
+    def emit_array_index_address_value(self, fn: str, name: str, index: IRValue, target: str) -> None:
         info = self.lookup_symbol(fn, name)
         if info.kind != "array":
             raise ValueError(f"'{name}' is not an array")
 
-        self.emit_expr(fn, index_expr, "r2")
         helper = self.addr_helper_label(info.label)
         self.emit(f"    LD    r5, {helper}(r0)")
+        self.emit_load_operand(fn, index, "r2")
         self.emit(f"    ADD   {target}, r5, r2")
+
+    def emit_load_array_elem_value(self, fn: str, name: str, index: IRValue, target: str) -> None:
+        info = self.lookup_symbol(fn, name)
+        if info.kind != "array":
+            raise ValueError(f"'{name}' is not an array")
+
+        if isinstance(index, int):
+            if index == 0:
+                self.emit(f"    LD    {target}, {info.label}(r0)")
+            elif index > 0:
+                self.emit(f"    LD    {target}, {info.label}+{index}(r0)")
+            else:
+                self.emit(f"    LD    {target}, {info.label}{index}(r0)")
+            return
+
+        self.emit_array_index_address_value(fn, name, index, "r4")
+        self.emit(f"    LD    {target}, 0(r4)")
+
+    def emit_store_array_elem_value(self, fn: str, name: str, index: IRValue, value: IRValue) -> None:
+        info = self.lookup_symbol(fn, name)
+        if info.kind != "array":
+            raise ValueError(f"'{name}' is not an array")
+
+        if isinstance(index, int):
+            self.emit_load_operand(fn, value, "r3")
+            if index == 0:
+                self.emit(f"    ST    r3, {info.label}(r0)")
+            elif index > 0:
+                self.emit(f"    ST    r3, {info.label}+{index}(r0)")
+            else:
+                self.emit(f"    ST    r3, {info.label}{index}(r0)")
+            return
+
+        self.emit_array_index_address_value(fn, name, index, "r4")
+        self.emit_load_operand(fn, value, "r3")
+        self.emit("    ST    r3, 0(r4)")
 
     def emit_relop_false_jump(self, op: str, false_label: str) -> None:
         relop_to_emit = {
@@ -747,265 +1044,124 @@ class CodeGen:
         self.emit(f"    {compare_instr}")
         self.emit(f"    {branch_instr}   r3, {false_label}")
 
-    def emit_expr_with_saved_left(self, fn: str, right_expr: Expr) -> None:
-        if self.expr_contains_call(right_expr):
-            tmp = self.fn_tmp_label(fn)
-            self.emit(f"    ST    r1, {tmp}(r0)")
-        self.emit_expr(fn, right_expr, "r2")
-        if self.expr_contains_call(right_expr):
-            tmp = self.fn_tmp_label(fn)
-            self.emit(f"    LD    r1, {tmp}(r0)")
-
-    def emit_load_array_elem(self, fn: str, name: str, index_expr: Expr, target: str) -> None:
-        info = self.lookup_symbol(fn, name)
-        if info.kind != "array":
-            raise ValueError(f"'{name}' is not an array")
-
-        const_idx = self.const_eval(index_expr)
-        if const_idx is not None:
-            if const_idx == 0:
-                self.emit(f"    LD    {target}, {info.label}(r0)")
-            elif const_idx > 0:
-                self.emit(f"    LD    {target}, {info.label}+{const_idx}(r0)")
-            else:
-                self.emit(f"    LD    {target}, {info.label}{const_idx}(r0)")
-            return
-
-        self.emit_array_index_address(fn, name, index_expr, "r6")
-        self.emit(f"    LD    {target}, 0(r6)")
-
-    def emit_store_array_elem(self, fn: str, name: str, index_expr: Expr, src: str) -> None:
-        info = self.lookup_symbol(fn, name)
-        if info.kind != "array":
-            raise ValueError(f"'{name}' is not an array")
-
-        const_idx = self.const_eval(index_expr)
-        if const_idx is not None:
-            if const_idx == 0:
-                self.emit(f"    ST    {src}, {info.label}(r0)")
-            elif const_idx > 0:
-                self.emit(f"    ST    {src}, {info.label}+{const_idx}(r0)")
-            else:
-                self.emit(f"    ST    {src}, {info.label}{const_idx}(r0)")
-            return
-
-        self.emit_array_index_address(fn, name, index_expr, "r6")
-        self.emit(f"    ST    {src}, 0(r6)")
-
-    def emit_load_lvalue_address(self, fn: str, name: str, index_expr: Optional[Expr], target: str) -> None:
-        if index_expr is None:
-            self.emit_load_address_of_scalar(fn, name, target)
-            return
-
-        info = self.lookup_symbol(fn, name)
-        if info.kind != "array":
-            raise ValueError(f"Cannot index non-array '{name}'")
-        self.emit_array_index_address(fn, name, index_expr, target)
-
-    def emit_call(self, fn: str, call_expr: Expr, target: str) -> None:
-        callee = call_expr.name or ""
+    def emit_call(self, fn: str, instr: IRInstr) -> None:
+        callee = instr.name or ""
         callee_fn = self.func_by_name.get(callee)
         if callee_fn is None:
             raise NameError(f"Unknown function: {callee}")
 
-        args = call_expr.args or []
+        args = instr.args or []
         if len(args) != len(callee_fn.params):
             raise SyntaxError(
                 f"Function '{callee}' expects {len(callee_fn.params)} arg(s), got {len(args)}"
             )
 
         for p, a in zip(callee_fn.params, args):
-            if p.by_ref:
-                if a.kind == "var":
-                    self.emit_load_lvalue_address(fn, a.name or "", None, "r3")
-                elif a.kind == "array":
-                    self.emit_load_lvalue_address(fn, a.name or "", a.index, "r3")
-                else:
-                    raise SyntaxError(
-                        f"By-reference parameter '{p.name}' in call to '{callee}' requires an lvalue"
-                    )
-                slot = self.lookup_symbol(callee, p.name).label
-                self.emit(f"    ST    r3, {slot}(r0)")
-            else:
-                self.emit_expr(fn, a, "r3")
-                slot = self.lookup_symbol(callee, p.name).label
-                self.emit(f"    ST    r3, {slot}(r0)")
+            self.emit_load_operand(fn, a, "r3")
+            slot = self.lookup_symbol(callee, p.name).label
+            self.emit(f"    ST    r3, {slot}(r0)")
 
-        # Preserve return-link register in non-main functions.
+        # Preserve return-link register in non-main functions that make calls.
         if self.fn_needs_saved_r7.get(fn, False):
             self.emit(f"    ST    r7, {self.fn_saved_r7_label(fn)}(r0)")
         self.emit(f"    JL    r7, {callee}")
         if self.fn_needs_saved_r7.get(fn, False):
             self.emit(f"    LD    r7, {self.fn_saved_r7_label(fn)}(r0)")
 
-        if target != "r1":
-            self.emit(f"    ADDI  {target}, r1, 0")
+        if instr.dst is not None:
+            self.emit_store_scalar(fn, instr.dst, "r1")
 
-    def emit_expr(self, fn: str, expr: Expr, target: str) -> None:
-        if expr.kind == "num":
-            self.emit(f"    LDI   {target}, {expr.value}")
+    def emit_ir_instr(self, fn: str, instr: IRInstr, is_main: bool) -> None:
+        if instr.op == "const":
+            if instr.dst is None or instr.src is None:
+                raise ValueError("Malformed const instruction")
+            self.emit_store_operand(fn, instr.dst, instr.src)
             return
 
-        if expr.kind == "var":
-            self.emit_load_scalar(fn, expr.name or "", target)
+        if instr.op == "store":
+            if instr.name is None or instr.src is None:
+                raise ValueError("Malformed store instruction")
+            self.emit_store_operand(fn, instr.name, instr.src)
             return
 
-        if expr.kind == "array":
-            self.emit_load_array_elem(fn, expr.name or "", expr.index, target)
-            return
-
-        if expr.kind == "call":
-            self.emit_call(fn, expr, target)
-            return
-
-        if expr.kind in ("add", "sub", "and", "or"):
-            self.emit_expr(fn, expr.left, "r1")
-            self.emit_expr_with_saved_left(fn, expr.right)
-
-            if expr.kind == "add":
+        if instr.op == "bin":
+            if instr.dst is None or instr.binop is None or instr.left is None or instr.right is None:
+                raise ValueError("Malformed binary instruction")
+            self.emit_load_operand(fn, instr.left, "r1")
+            self.emit_load_operand(fn, instr.right, "r2")
+            if instr.binop == "add":
                 self.emit("    ADD   r3, r1, r2")
-            elif expr.kind == "sub":
+            elif instr.binop == "sub":
                 self.emit("    SUB   r3, r1, r2")
-            elif expr.kind == "and":
+            elif instr.binop == "and":
                 self.emit("    AND   r3, r1, r2")
-            elif expr.kind == "or":
+            elif instr.binop == "or":
                 self.emit("    OR    r3, r1, r2")
-
-            if target != "r3":
-                self.emit(f"    ADDI  {target}, r3, 0")
-            return
-
-        raise ValueError(f"Unsupported expression kind: {expr.kind}")
-
-    def emit_condition_false_branch(self, fn: str, cond: Cond, false_label: str) -> None:
-        self.emit_expr(fn, cond.left, "r1")
-        if self.expr_contains_call(cond.right):
-            tmp = self.fn_tmp_label(fn)
-            self.emit(f"    ST    r1, {tmp}(r0)")
-        self.emit_expr(fn, cond.right, "r2")
-        if self.expr_contains_call(cond.right):
-            tmp = self.fn_tmp_label(fn)
-            self.emit(f"    LD    r1, {tmp}(r0)")
-
-        self.emit_relop_false_jump(cond.op, false_label)
-
-    def emit_stmt(self, fn: str, st: Stmt, is_main: bool) -> None:
-        if st.kind == "decl":
-            if st.decl is None:
-                return
-            d = st.decl
-            if d.init is not None:
-                if is_main and self.const_eval(d.init) is not None:
-                    return
-                self.emit_expr(fn, d.init, "r3")
-                self.emit_store_scalar(fn, d.name, "r3")
-            return
-
-        if st.kind == "assign":
-            if st.assign is None:
-                return
-            a = st.assign
-            self.emit_expr(fn, a.expr, "r3")
-            if a.target_index is None:
-                self.emit_store_scalar(fn, a.target_name, "r3")
             else:
-                self.emit_store_array_elem(fn, a.target_name, a.target_index, "r3")
+                raise ValueError(f"Unsupported binary operator: {instr.binop}")
+            self.emit_store_scalar(fn, instr.dst, "r3")
             return
 
-        if st.kind == "expr":
-            if st.expr is not None:
-                self.emit_expr(fn, st.expr, "r1")
+        if instr.op == "load_array":
+            if instr.dst is None or instr.name is None or instr.index is None:
+                raise ValueError("Malformed load_array instruction")
+            self.emit_load_array_elem_value(fn, instr.name, instr.index, "r3")
+            self.emit_store_scalar(fn, instr.dst, "r3")
             return
 
-        if st.kind == "block":
-            for inner in st.body or []:
-                self.emit_stmt(fn, inner, is_main)
+        if instr.op == "store_array":
+            if instr.name is None or instr.index is None or instr.src is None:
+                raise ValueError("Malformed store_array instruction")
+            self.emit_store_array_elem_value(fn, instr.name, instr.index, instr.src)
             return
 
-        if st.kind == "if":
-            sid = self.next_struct_id("if")
-            else_lbl = f"else_{sid}"
-            end_lbl = f"ifend_{sid}"
-            if st.cond is None:
-                raise ValueError("if missing condition")
-            self.emit_condition_false_branch(fn, st.cond, else_lbl)
-            for inner in st.then_body or []:
-                self.emit_stmt(fn, inner, is_main)
-            self.emit(f"    BEZ   r0, {end_lbl}")
-            self.emit(f"{else_lbl}:")
-            for inner in st.else_body or []:
-                self.emit_stmt(fn, inner, is_main)
-            self.emit(f"{end_lbl}:")
+        if instr.op == "addr":
+            if instr.dst is None or instr.name is None:
+                raise ValueError("Malformed addr instruction")
+            if instr.index is None:
+                self.emit_load_address_of_scalar(fn, instr.name, "r3")
+            else:
+                self.emit_array_index_address_value(fn, instr.name, instr.index, "r3")
+            self.emit_store_scalar(fn, instr.dst, "r3")
             return
 
-        if st.kind == "while":
-            sid = self.next_struct_id("while")
-            start_lbl = f"while_start_{sid}"
-            end_lbl = f"while_end_{sid}"
-            self.emit(f"{start_lbl}:")
-            if st.cond is None:
-                raise ValueError("while missing condition")
-            self.emit_condition_false_branch(fn, st.cond, end_lbl)
-            for inner in st.body or []:
-                self.emit_stmt(fn, inner, is_main)
-            self.emit(f"    BEZ   r0, {start_lbl}")
-            self.emit(f"{end_lbl}:")
+        if instr.op == "call":
+            self.emit_call(fn, instr)
             return
 
-        if st.kind == "for":
-            if st.init is not None:
-                self.emit_stmt(fn, st.init, is_main)
-
-            sid = self.next_struct_id("for")
-            start_lbl = f"for_start_{sid}"
-            end_lbl = f"for_end_{sid}"
-            self.emit(f"{start_lbl}:")
-            if st.cond is not None:
-                self.emit_condition_false_branch(fn, st.cond, end_lbl)
-
-            for inner in st.body or []:
-                self.emit_stmt(fn, inner, is_main)
-
-            if st.update is not None:
-                self.emit_stmt(fn, st.update, is_main)
-
-            self.emit(f"    BEZ   r0, {start_lbl}")
-            self.emit(f"{end_lbl}:")
+        if instr.op == "jump_false":
+            if instr.left is None or instr.right is None or instr.cond_op is None or instr.label is None:
+                raise ValueError("Malformed jump_false instruction")
+            self.emit_load_operand(fn, instr.left, "r1")
+            self.emit_load_operand(fn, instr.right, "r2")
+            self.emit_relop_false_jump(instr.cond_op, instr.label)
             return
 
-        if st.kind == "return":
-            if st.expr is None:
-                raise ValueError("return requires expression")
-            self.emit_expr(fn, st.expr, "r1")
+        if instr.op == "jump":
+            if instr.label is None:
+                raise ValueError("Malformed jump instruction")
+            self.emit(f"    BEZ   r0, {instr.label}")
+            return
+
+        if instr.op == "label":
+            if instr.label is None:
+                raise ValueError("Malformed label instruction")
+            self.emit(f"{instr.label}:")
+            return
+
+        if instr.op == "return":
+            self.emit_load_operand(fn, instr.src if instr.src is not None else 0, "r1")
             if is_main:
                 self.emit("    HALT")
             else:
                 self.emit("    JR    r7")
             return
 
-        raise ValueError(f"Unsupported statement kind: {st.kind}")
-
-    def stmt_guarantees_return(self, st: Stmt) -> bool:
-        if st.kind == "return":
-            return True
-        if st.kind == "block":
-            return self.block_guarantees_return(st.body or [])
-        if st.kind == "if":
-            then_body = st.then_body or []
-            else_body = st.else_body or []
-            if not then_body or not else_body:
-                return False
-            return self.block_guarantees_return(then_body) and self.block_guarantees_return(else_body)
-        return False
-
-    def block_guarantees_return(self, body: List[Stmt]) -> bool:
-        for st in body:
-            if self.stmt_guarantees_return(st):
-                return True
-        return False
+        raise ValueError(f"Unsupported IR instruction: {instr.op}")
 
     def generate(self) -> str:
-        self.collect_symbols()
+        self.ir_prog = IRGen(self.prog).generate()
+        self.collect_symbols(self.ir_prog)
 
         self.emit(".text")
         self.emit(".global main")
@@ -1013,14 +1169,10 @@ class CodeGen:
 
         for fn in self.prog.functions:
             is_main = fn.name == "main"
+            ir_fn = self.ir_by_name[fn.name]
             self.emit(f"{fn.name}:")
-            for st in fn.body:
-                self.emit_stmt(fn.name, st, is_main)
-            if not self.block_guarantees_return(fn.body):
-                if is_main:
-                    self.emit("    HALT")
-                else:
-                    self.emit("    JR    r7")
+            for instr in ir_fn.instrs:
+                self.emit_ir_instr(fn.name, instr, is_main)
             self.emit("")
 
         self.emit(".data")
@@ -1028,7 +1180,6 @@ class CodeGen:
             self.emit(f"{label}: .word {value}")
 
         return "\n".join(self.lines).rstrip() + "\n"
-
 
 def main() -> None:
     if len(sys.argv) == 1:
