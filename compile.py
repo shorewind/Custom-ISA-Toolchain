@@ -24,7 +24,6 @@ Supported subset:
   - return expression;
   - parameters by value and by reference
   - by-reference syntax accepted as either:
-    - ref int x
     - int &x
 
 Important codegen note:
@@ -225,7 +224,7 @@ class Parser:
         self.take("}")
         return out
 
-    def finish_decl_after_name(self, name: str, allow_init: bool) -> VarDecl:
+    def finish_decl_after_name(self, name: str, allow_init: bool, require_semi: bool = True) -> VarDecl:
         if self.peek() == "[":
             self.take("[")
             size_tok = self.take()
@@ -235,7 +234,8 @@ class Parser:
             if size <= 0:
                 raise SyntaxError("Array size must be > 0")
             self.take("]")
-            self.take(";")
+            if require_semi:
+                self.take(";")
             return VarDecl(name=name, size=size)
 
         init: Optional[Expr] = None
@@ -243,13 +243,14 @@ class Parser:
             self.take("=")
             init = self.parse_expr()
 
-        self.take(";")
+        if require_semi:
+            self.take(";")
         return VarDecl(name=name, size=1, init=init)
 
-    def parse_decl_stmt(self) -> Stmt:
+    def parse_decl_stmt(self, require_semi: bool = True) -> Stmt:
         self.take("int")
         name = self.take_ident()
-        decl = self.finish_decl_after_name(name, allow_init=True)
+        decl = self.finish_decl_after_name(name, allow_init=True, require_semi=require_semi)
         return Stmt(kind="decl", decl=decl)
 
     def parse_lvalue(self) -> tuple[str, Optional[Expr]]:
@@ -289,29 +290,8 @@ class Parser:
         if self.peek() == ";":
             return None
         if self.peek() == "int":
-            return self.parse_decl_stmt_no_semicolon()
+            return self.parse_decl_stmt(require_semi=False)
         return self.parse_assign_stmt(require_semi=False)
-
-    def parse_decl_stmt_no_semicolon(self) -> Stmt:
-        self.take("int")
-        name = self.take_ident()
-
-        if self.peek() == "[":
-            self.take("[")
-            size_tok = self.take()
-            if not size_tok.isdigit():
-                raise SyntaxError("Array size must be a positive integer literal")
-            size = int(size_tok)
-            if size <= 0:
-                raise SyntaxError("Array size must be > 0")
-            self.take("]")
-            return Stmt(kind="decl", decl=VarDecl(name=name, size=size))
-
-        init: Optional[Expr] = None
-        if self.peek() == "=":
-            self.take("=")
-            init = self.parse_expr()
-        return Stmt(kind="decl", decl=VarDecl(name=name, size=1, init=init))
 
     def parse_stmt(self) -> Stmt:
         tok = self.peek()
