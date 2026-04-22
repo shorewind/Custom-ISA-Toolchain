@@ -719,6 +719,16 @@ class CodeGen:
             return
         raise ValueError(f"Cannot take scalar address of array '{name}'")
 
+    def emit_array_index_address(self, fn: str, name: str, index_expr: Expr, target: str) -> None:
+        info = self.lookup_symbol(fn, name)
+        if info.kind != "array":
+            raise ValueError(f"'{name}' is not an array")
+
+        self.emit_expr(fn, index_expr, "r2")
+        helper = self.addr_helper_label(info.label)
+        self.emit(f"    LD    r5, {helper}(r0)")
+        self.emit(f"    ADD   {target}, r5, r2")
+
     def emit_load_array_elem(self, fn: str, name: str, index_expr: Expr, target: str) -> None:
         info = self.lookup_symbol(fn, name)
         if info.kind != "array":
@@ -734,10 +744,7 @@ class CodeGen:
                 self.emit(f"    LD    {target}, {info.label}{const_idx}(r0)")
             return
 
-        self.emit_expr(fn, index_expr, "r2")
-        helper = self.addr_helper_label(info.label)
-        self.emit(f"    LD    r5, {helper}(r0)")
-        self.emit("    ADD   r6, r5, r2")
+        self.emit_array_index_address(fn, name, index_expr, "r6")
         self.emit(f"    LD    {target}, 0(r6)")
 
     def emit_store_array_elem(self, fn: str, name: str, index_expr: Expr, src: str) -> None:
@@ -755,10 +762,7 @@ class CodeGen:
                 self.emit(f"    ST    {src}, {info.label}{const_idx}(r0)")
             return
 
-        self.emit_expr(fn, index_expr, "r2")
-        helper = self.addr_helper_label(info.label)
-        self.emit(f"    LD    r5, {helper}(r0)")
-        self.emit("    ADD   r6, r5, r2")
+        self.emit_array_index_address(fn, name, index_expr, "r6")
         self.emit(f"    ST    {src}, 0(r6)")
 
     def emit_load_lvalue_address(self, fn: str, name: str, index_expr: Optional[Expr], target: str) -> None:
@@ -769,10 +773,7 @@ class CodeGen:
         info = self.lookup_symbol(fn, name)
         if info.kind != "array":
             raise ValueError(f"Cannot index non-array '{name}'")
-        self.emit_expr(fn, index_expr, "r2")
-        helper = self.addr_helper_label(info.label)
-        self.emit(f"    LD    r5, {helper}(r0)")
-        self.emit(f"    ADD   {target}, r5, r2")
+        self.emit_array_index_address(fn, name, index_expr, target)
 
     def emit_call(self, fn: str, call_expr: Expr, target: str) -> None:
         callee = call_expr.name or ""
