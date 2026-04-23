@@ -1,3 +1,5 @@
+// Regression: nested binary expressions must preserve both subtrees.
+
 int g;
 
 int main() {

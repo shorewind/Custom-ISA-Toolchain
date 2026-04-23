@@ -190,16 +190,16 @@ class CompilerRegressionTests(unittest.TestCase):
         )
         self.assertEqual(ret, 9)
 
-    def test_by_reference_call_updates_caller_slot(self):
+    def test_by_pointer_call_updates_caller_slot(self):
         ret, _, _, _ = run_source(
             """
-            int bump(int &x) {
-                x = x + 1;
-                return x;
+            int bump(int *x) {
+                *x = *x + 1;
+                return *x;
             }
             int main() {
                 int a = 4;
-                bump(a);
+                bump(&a);
                 return a;
             }
             """

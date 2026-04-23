@@ -1,3 +1,5 @@
+// Regression: nested calls must preserve intermediate return values.
+
 int inc(int x) {
     return x + 1;
 }

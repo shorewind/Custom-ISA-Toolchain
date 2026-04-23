@@ -1,3 +1,5 @@
+// Regression: control-flow labels must stay unique across nested branches.
+
 int g;
 int main() {
 	int i = 0;

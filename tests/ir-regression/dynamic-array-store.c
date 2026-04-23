@@ -1,3 +1,5 @@
+// Regression: computed array addresses must not clobber the RHS value.
+
 int a[8];
 
 int main() {
