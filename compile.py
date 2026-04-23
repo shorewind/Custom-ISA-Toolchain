@@ -15,6 +15,8 @@ Supported subset:
   - variables and array indexing
   - function calls
   - +, -, &, |
+  - &variable (address-of, for pointer arguments)
+  - *variable (pointer dereference, for pointer parameters)
 - Control flow:
   - if / else
   - while
@@ -22,9 +24,9 @@ Supported subset:
   - Relational operators in conditions: ==, !=, >, <=, <, >=
 - Functions:
   - return expression;
-  - parameters by value and by reference
-  - by-reference syntax accepted as either:
-    - int &x
+  - parameters by value, by pointer (C: int *x), or by reference (C++: int &x)
+  - by-pointer: caller passes &var, callee uses *x to read/write through the pointer
+  - by-reference: compiler handles address-taking and dereferencing implicitly
 
 Important codegen note:
 - This ISA/toolchain has no hardware stack pointer in the exposed subset, so
@@ -42,15 +44,15 @@ from typing import Dict, List, Optional, Union
 
 
 # -----------------------------------------------------------------------------
-# Lexer
+# 1) LEXER
 # -----------------------------------------------------------------------------
 TOKEN_RE = re.compile(
-    r"\s*(<=|>=|==|!=|[A-Za-z_]\w*|\d+|[{}()\[\];,+\-=&|<>])"
-)
+    r"\s*(<=|>=|==|!=|[A-Za-z_]\w*|\d+|[{}()\[\];,+\-=&|<>*])"
+)  # two-char operators listed first so alternation matches them before single-char prefixes
 
 
 def lex(src: str) -> List[str]:
-    src = re.sub(r"//.*", "", src)
+    src = re.sub(r"//.*", "", src)  # strip // line comments before tokenizing
     toks: List[str] = []
     pos = 0
     while pos < len(src):
@@ -66,7 +68,7 @@ def lex(src: str) -> List[str]:
 
 
 # -----------------------------------------------------------------------------
-# AST
+# 2) AST
 # -----------------------------------------------------------------------------
 @dataclass
 class VarDecl:
@@ -78,7 +80,8 @@ class VarDecl:
 @dataclass
 class Param:
     name: str
-    by_ref: bool = False
+    by_ref: bool = False   # C++ int &x: compiler implicitly dereferences
+    by_ptr: bool = False   # C   int *x: caller passes &var, callee uses *x explicitly
 
 
 @dataclass
@@ -104,6 +107,7 @@ class Assign:
     target_name: str
     target_index: Optional[Expr]
     expr: Expr
+    target_deref: bool = False  # True for *x = expr (write through pointer)
 
 
 @dataclass
@@ -134,7 +138,7 @@ class Program:
 
 
 # -----------------------------------------------------------------------------
-# Parser
+# 3) PARSER
 # -----------------------------------------------------------------------------
 REL_OPS = {"==", "!=", ">", "<=", "<", ">="}
 BINARY_OPS = {"add", "sub", "and", "or"}
@@ -240,20 +244,19 @@ class Parser:
 
         while True:
             by_ref = False
+            by_ptr = False
 
-            if self.peek() == "ref":
-                self.take("ref")
-                self.take("int")
-                name = self.take_ident()
+            self.take("int")
+            # accept "int &x" (C++ reference) or "int *x" (C pointer) for indirect params
+            if self.peek() == "&":
+                self.take("&")
                 by_ref = True
-            else:
-                self.take("int")
-                if self.peek() == "&":
-                    self.take("&")
-                    by_ref = True
-                name = self.take_ident()
+            elif self.peek() == "*":
+                self.take("*")
+                by_ptr = True
+            name = self.take_ident()
 
-            params.append(Param(name=name, by_ref=by_ref))
+            params.append(Param(name=name, by_ref=by_ref, by_ptr=by_ptr))
 
             if self.peek() == ",":
                 self.take(",")
@@ -316,6 +319,15 @@ class Parser:
             self.take(";")
         return Stmt(kind="assign", assign=Assign(target_name=name, target_index=idx, expr=expr))
 
+    def parse_deref_assign_stmt(self, require_semi: bool) -> Stmt:
+        self.take("*")
+        name = self.take_ident()
+        self.take("=")
+        expr = self.parse_expr()
+        if require_semi:
+            self.take(";")
+        return Stmt(kind="assign", assign=Assign(target_name=name, target_index=None, expr=expr, target_deref=True))
+
     def parse_call_stmt(self, require_semi: bool) -> Stmt:
         call_expr = self.parse_postfix(Expr(kind="var", name=self.take_ident()))
         if call_expr.kind != "call":
@@ -330,7 +342,7 @@ class Parser:
             op = self.take()
             right = self.parse_expr()
             return Cond(left=left, op=op, right=right)
-        return Cond(left=left, op="!=", right=Expr(kind="num", value=0))
+        return Cond(left=left, op="!=", right=Expr(kind="num", value=0))  # bare expression: implicitly test expr != 0
 
     def parse_for_init(self) -> Optional[Stmt]:
         if self.peek() == ";":
@@ -396,6 +408,9 @@ class Parser:
         if tok is None:
             raise SyntaxError("Unexpected end of input in statement")
 
+        if tok == "*":
+            return self.parse_deref_assign_stmt(require_semi=True)
+
         if not re.fullmatch(r"[A-Za-z_]\w*", tok):
             raise SyntaxError(f"Unexpected token in statement: {tok!r}")
 
@@ -436,6 +451,17 @@ class Parser:
             self.take("-")
             inner = self.parse_unary()
             return Expr(kind="sub", left=Expr(kind="num", value=0), right=inner)
+        if self.peek() == "*":
+            # pointer dereference: *x reads through the pointer stored in x
+            self.take("*")
+            name = self.take_ident()
+            return Expr(kind="deref", name=name)
+        if self.peek() == "&":
+            # address-of: &x yields the address of x (used to pass pointer arguments)
+            # Note: binary & is consumed by parse_and before reaching here.
+            self.take("&")
+            name = self.take_ident()
+            return Expr(kind="addr_of", name=name)
         return self.parse_primary()
 
     def parse_primary(self) -> Expr:
@@ -491,12 +517,12 @@ class Parser:
 
 
 # -----------------------------------------------------------------------------
-# TACKY-style IR
+# 4) IR LOWERING
 # -----------------------------------------------------------------------------
 # IR values are intentionally tiny: either an integer constant or the name of a
 # scalar slot. Arrays and calls become explicit IR instructions so codegen never
 # has to recursively evaluate a complex AST while holding live registers.
-IRValue = Union[int, str]
+IRValue = Union[int, str]  # int = compile-time constant; str = named .data slot
 
 
 @dataclass
@@ -577,6 +603,16 @@ class IRGen:
         if expr.kind == "call":
             return self.emit_call(expr)
 
+        if expr.kind == "deref":
+            dst = self.new_temp()
+            self.emit(IRInstr(op="deref_load", dst=dst, name=expr.name))
+            return dst
+
+        if expr.kind == "addr_of":
+            dst = self.new_temp()
+            self.emit(IRInstr(op="addr", dst=dst, name=expr.name))
+            return dst
+
         if expr.kind in BINARY_OPS:
             left = self.emit_expr(expr.left)
             right = self.emit_expr(expr.right)
@@ -589,6 +625,7 @@ class IRGen:
         raise ValueError(f"Unsupported expression kind: {expr.kind}")
 
     def emit_lvalue_address(self, expr: Expr, callee: str, param_name: str) -> IRValue:
+        # by-reference args pass the caller's slot address; the callee writes through it
         if expr.kind == "var":
             dst = self.new_temp()
             self.emit(IRInstr(op="addr", dst=dst, name=expr.name))
@@ -663,6 +700,12 @@ class IRGen:
             self.emit(IRInstr(op="bin", dst=dst, binop=expr.kind, left=left, right=right))
             return
 
+        if expr.kind in ("deref", "addr_of"):
+            value = self.emit_expr(expr)
+            if isinstance(value, int) or value != dst:
+                self.emit(IRInstr(op="store", name=dst, src=value))
+            return
+
         raise ValueError(f"Unsupported expression kind: {expr.kind}")
 
     def emit_condition_false_branch(self, cond: Cond, false_label: str) -> None:
@@ -682,7 +725,11 @@ class IRGen:
         if st.kind == "assign":
             if st.assign is None:
                 return
-            if st.assign.target_index is None:
+            if st.assign.target_deref:
+                # *x = expr: write through the pointer stored in x
+                value = self.emit_expr(st.assign.expr)
+                self.emit(IRInstr(op="deref_store", name=st.assign.target_name, src=value))
+            elif st.assign.target_index is None:
                 self.emit_expr_to(st.assign.expr, st.assign.target_name)
             else:
                 # For stores through computed addresses, preserve the RHS first;
@@ -763,6 +810,7 @@ class IRGen:
         raise ValueError(f"Unsupported statement kind: {st.kind}")
 
     def stmt_guarantees_return(self, st: Stmt) -> bool:
+        # used to decide whether an implicit "return 0" is needed at function end
         if st.kind == "return":
             return True
         if st.kind == "block":
@@ -800,7 +848,7 @@ class IRGen:
 
 
 # -----------------------------------------------------------------------------
-# Code generator
+# 5) CODE GENERATOR
 # -----------------------------------------------------------------------------
 @dataclass
 class SymbolInfo:
@@ -835,7 +883,7 @@ class CodeGen:
 
     def add_data_word(self, label: str, value: int | str = 0) -> None:
         if label in self.data_seen:
-            return
+            return  # deduplication: addr_helpers may re-request an already-allocated label
         self.data_seen.add(label)
         self.data_index[label] = len(self.data_entries)
         self.data_entries.append((label, value))
@@ -852,10 +900,12 @@ class CodeGen:
             self.add_data_word(f"{base_label}_{i}", init)
 
     def addr_helper_label(self, target_label: str) -> str:
+        # The ISA has no PC-relative data addressing; to load a label's address
+        # into a register, emit a .word holding the address and load that pointer word.
         if target_label not in self.addr_helpers:
             helper = f"addr_{target_label}"
             self.addr_helpers[target_label] = helper
-            self.add_data_word(helper, target_label)
+            self.add_data_word(helper, target_label)  # .word pointing at target_label itself
         return self.addr_helpers[target_label]
 
     def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
@@ -923,6 +973,8 @@ class CodeGen:
             self.func_params[fn.name] = fn.params
 
             ir_fn = self.ir_by_name.get(fn.name)
+            # main exits via HALT so never needs r7 saved; other callers must save r7
+            # because JL overwrites it with the return address of the outgoing call.
             self.fn_needs_saved_r7[fn.name] = fn.name != "main" and ir_fn is not None and any(
                 instr.op == "call" for instr in ir_fn.instrs
             )
@@ -933,6 +985,10 @@ class CodeGen:
                 if p.by_ref:
                     slot = f"{fn.name}_p_ref_{p.name}"
                     local_map[p.name] = SymbolInfo(kind="param_ref", label=slot, size=1)
+                    self.add_data_word(slot, 0)
+                elif p.by_ptr:
+                    slot = f"{fn.name}_p_ptr_{p.name}"
+                    local_map[p.name] = SymbolInfo(kind="param_ptr", label=slot, size=1)
                     self.add_data_word(slot, 0)
                 else:
                     slot = f"{fn.name}_p_val_{p.name}"
@@ -966,23 +1022,23 @@ class CodeGen:
 
     def emit_load_scalar(self, fn: str, name: str, target: str) -> None:
         info = self.lookup_symbol(fn, name)
-        if info.kind in ("scalar", "param_val"):
+        if info.kind in ("scalar", "param_val", "param_ptr"):
             self.emit(f"    LD    {target}, {info.label}(r0)")
             return
         if info.kind == "param_ref":
-            self.emit(f"    LD    r6, {info.label}(r0)")
-            self.emit(f"    LD    {target}, 0(r6)")
+            self.emit(f"    LD    r6, {info.label}(r0)")  # load caller's slot address from param
+            self.emit(f"    LD    {target}, 0(r6)")       # dereference to get caller's value
             return
         raise ValueError(f"Cannot read array variable '{name}' without index")
 
     def emit_store_scalar(self, fn: str, name: str, src: str) -> None:
         info = self.lookup_symbol(fn, name)
-        if info.kind in ("scalar", "param_val"):
+        if info.kind in ("scalar", "param_val", "param_ptr"):
             self.emit(f"    ST    {src}, {info.label}(r0)")
             return
         if info.kind == "param_ref":
-            self.emit(f"    LD    r6, {info.label}(r0)")
-            self.emit(f"    ST    {src}, 0(r6)")
+            self.emit(f"    LD    r6, {info.label}(r0)")  # load caller's slot address
+            self.emit(f"    ST    {src}, 0(r6)")          # write through the pointer
             return
         raise ValueError(f"Cannot assign array variable '{name}' without index")
 
@@ -998,7 +1054,7 @@ class CodeGen:
 
     def emit_load_address_of_scalar(self, fn: str, name: str, target: str) -> None:
         info = self.lookup_symbol(fn, name)
-        if info.kind in ("scalar", "param_val"):
+        if info.kind in ("scalar", "param_val", "param_ptr"):
             helper = self.addr_helper_label(info.label)
             self.emit(f"    LD    {target}, {helper}(r0)")
             return
@@ -1013,9 +1069,9 @@ class CodeGen:
             raise ValueError(f"'{name}' is not an array")
 
         helper = self.addr_helper_label(info.label)
-        self.emit(f"    LD    r5, {helper}(r0)")
-        self.emit_load_operand(fn, index, "r2")
-        self.emit(f"    ADD   {target}, r5, r2")
+        self.emit(f"    LD    r5, {helper}(r0)")       # load base address of array
+        self.emit_load_operand(fn, index, "r2")        # load index
+        self.emit(f"    ADD   {target}, r5, r2")       # base + index = element address
 
     def emit_load_array_elem_value(self, fn: str, name: str, index: IRValue, target: str) -> None:
         info = self.lookup_symbol(fn, name)
@@ -1068,7 +1124,7 @@ class CodeGen:
             slot = self.lookup_symbol(callee, p.name).label
             self.emit(f"    ST    r3, {slot}(r0)")
 
-        # Preserve return-link register in non-main functions that make calls.
+        # Preserve r7 around the call: JL will overwrite it with the new return address.
         if self.fn_needs_saved_r7.get(fn, False):
             self.emit(f"    ST    r7, {self.fn_saved_r7_label(fn)}(r0)")
         self.emit(f"    JL    r7, {callee}")
@@ -1109,6 +1165,22 @@ class CodeGen:
         if instr.op == "store_array":
             name, index, src = self.require_fields(instr, "name", "index", "src")
             self.emit_store_array_elem_value(fn, name, index, src)
+            return
+
+        if instr.op == "deref_load":
+            dst, name = self.require_fields(instr, "dst", "name")
+            info = self.lookup_symbol(fn, name)
+            self.emit(f"    LD    r6, {info.label}(r0)")  # load pointer from slot
+            self.emit(f"    LD    r3, 0(r6)")             # dereference
+            self.emit_store_scalar(fn, dst, "r3")
+            return
+
+        if instr.op == "deref_store":
+            name, src = self.require_fields(instr, "name", "src")
+            info = self.lookup_symbol(fn, name)
+            self.emit_load_operand(fn, src, "r3")          # load value to write
+            self.emit(f"    LD    r6, {info.label}(r0)")   # load pointer from slot
+            self.emit(f"    ST    r3, 0(r6)")              # write through pointer
             return
 
         if instr.op == "addr":
@@ -1156,7 +1228,7 @@ class CodeGen:
         self.collect_symbols(self.ir_prog)
 
         self.emit(".text")
-        self.emit(".global main")
+        self.emit(".global main")  # entry point for the assembler
         self.emit("")
 
         for fn in self.prog.functions:
@@ -1169,7 +1241,7 @@ class CodeGen:
 
         self.emit(".data")
         for label, value in self.data_entries:
-            self.emit(f"{label}: .word {value}")
+            self.emit(f"{label}: .word {value}")  # emit data entries in allocation order
 
         return "\n".join(self.lines).rstrip() + "\n"
 
