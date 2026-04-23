@@ -29,9 +29,10 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `compile.py`: C-subset compiler, including lexer, parser, AST, IR lowering, and custom assembly generation.
 - `assemble.py`: two-pass assembler for `.text`, `.data`, labels, instructions, and `.word` data.
 - `tests/basic/`: minimal checked example source, assembly, and memory images.
+- `tests/ir-regression/`: focused examples proving nested expressions, dynamic array stores, nested calls, and by-reference calls.
+- `tests/label-check/`: control-flow label sanity check.
 - `tests/test_compiler.py`: semantic compiler tests with a small ISA interpreter.
 - `tmp/feature-check/`: manually useful feature smoke tests.
-- `tmp/ir-regression/`: focused examples proving nested expressions, dynamic array stores, nested calls, and by-reference calls.
 
 ## Supported C Subset
 
@@ -251,10 +252,10 @@ Basic compile example:
 
 IR regression examples:
 
-- `tmp/ir-regression/nested-expr.c`: nested expression preservation, expected return `10`.
-- `tmp/ir-regression/dynamic-array-store.c`: computed array store preserving RHS value, expected return `7`.
-- `tmp/ir-regression/nested-calls.c`: nested function calls, expected return `9`.
-- `tmp/ir-regression/ref-and-for.c`: by-reference calls with `for (int i = ...)`, expected return `3`.
+- `tests/ir-regression/nested-expr.c`: nested expression preservation, expected return `10`.
+- `tests/ir-regression/dynamic-array-store.c`: computed array store preserving RHS value, expected return `7`.
+- `tests/ir-regression/nested-calls.c`: nested function calls, expected return `9`.
+- `tests/ir-regression/ref-and-for.c`: by-reference calls with `for (int i = ...)`, expected return `3`.
 
 ## Testing Strategy
 
@@ -285,4 +286,4 @@ The fixed `.data` base at address `31` means larger programs can collide with da
 - Compiler implementation: `compile.py`
 - Assembler implementation: `assemble.py`
 - Semantic regression tests: `tests/test_compiler.py`
-- IR regression examples: `tmp/ir-regression/README.md`
+- IR regression examples: `tests/ir-regression/README.md`
