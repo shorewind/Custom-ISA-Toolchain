@@ -122,11 +122,11 @@ def parse_mem_operand(tok: str, sym: Dict[str, int]) -> Tuple[int, int]:
         else:
             imm = parse_int(off_expr)
 
-    imm7 = to_twos_comp(imm, 7)
+    imm7 = to_twos_comp(imm, 7)  # 7-bit signed: -64 to 63
     return imm7, rs
 
 # First pass: define symbols and record their memory addresses
-def first_pass(lines: List[str], text_base: int = 0, data_base: int = 31) -> Tuple[List[Line], Dict[str, int]]:
+def first_pass(lines: List[str], text_base: int = 0, data_base: int = 32) -> Tuple[List[Line], Dict[str, int]]:
     """
     Builds symbol table (labels->addresses) and a structured line list with addresses.
     Uses simple fixed placement:
@@ -279,7 +279,8 @@ def encode_instruction(toks: List[str], sym: Dict[str, int], pc: int) -> int:
 # Second pass: translate instructions and resolve symbols into machine code
 def second_pass(parsed: List[Line], sym: Dict[str, int], mem_depth: int = 64) -> List[int]:
     """
-    Produces a unified memory image (word-addressed) suitable for $readmemh into unified_mem.mem[].
+    Produces a unified memory image (word-addressed) suitable for $readmemh.
+    .text instructions and .data words share the same address space.
     """
     mem = [0] * mem_depth  # initialize memory with zeros
 
@@ -324,9 +325,9 @@ def main():
         src_lines = f.readlines()
 
     # declare base addresses for .text and .data sections and build symbol table
-    parsed, sym = first_pass(src_lines, text_base=0, data_base=31)
+    parsed, sym = first_pass(src_lines, text_base=0, data_base=32)
 
-    # set memory depth and generate memory image (word-addressed) for $readmemh
+    # set memory depth and generate unified memory image (word-addressed) for $readmemh
     mem = second_pass(parsed, sym, mem_depth=64)
 
     with open(out_path, "w") as f:
