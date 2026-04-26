@@ -42,7 +42,7 @@ def compile_to_asm(src):
 
 
 def assemble_text(asm):
-    parsed, symbols = assemble.first_pass(asm.splitlines(), text_base=0, data_base=31)
+    parsed, symbols = assemble.first_pass(asm.splitlines(), text_base=0, data_base=32)
     return assemble.second_pass(parsed, symbols, mem_depth=64), symbols
 
 
@@ -83,7 +83,7 @@ def run_words(mem, start_pc=0, max_steps=1000):
         elif op in (OP_ST, OP_LD):
             rs = (word >> 10) & 0b111
             rt = (word >> 7) & 0b111
-            imm = sext(word & 0b1111111, 7)
+            imm = sext(word & 0b1111111, 7)  # 7-bit signed offset (-64 to 63)
             addr = regs[rs] + imm
             if op == OP_ST:
                 mem[addr] = u16(regs[rt])
@@ -205,6 +205,22 @@ class CompilerRegressionTests(unittest.TestCase):
             """
         )
         self.assertEqual(ret, 5)
+
+    def test_cpp_reference_parameter_syntax_is_rejected(self):
+        with self.assertRaises(SyntaxError):
+            compile_to_asm(
+                """
+                int bump(int &x) {
+                    x = x + 1;
+                    return x;
+                }
+                int main() {
+                    int a = 4;
+                    bump(a);
+                    return a;
+                }
+                """
+            )
 
     def test_for_loop_decl_collects_initializer_symbol(self):
         ret, _, _, _ = run_source(
