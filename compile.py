@@ -1194,8 +1194,8 @@ class CodeGen:
 
 def main() -> None:
     if len(sys.argv) == 1:
-        in_path = "c-instr-ref.c"
-        out_path = "assembly-instr-ref.s"
+        in_path = "tests/basic/c-example.c"
+        out_path = "tests/basic/assembly-example.s"
     elif len(sys.argv) == 3:
         in_path = sys.argv[1]
         out_path = sys.argv[2]
