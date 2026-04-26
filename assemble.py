@@ -9,7 +9,7 @@ Usage:
 import re
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # -----------------------------------------------------------------------------
 # 1) ISA CONSTANTS
@@ -125,14 +125,56 @@ def parse_mem_operand(tok: str, sym: Dict[str, int]) -> Tuple[int, int]:
     imm7 = to_twos_comp(imm, 7)  # 7-bit signed: -64 to 63
     return imm7, rs
 
+def count_text_words(lines: List[str]) -> int:
+    section = "text"
+    pc_text = 0
+
+    for raw in lines:
+        line = strip_comment(raw)
+        if not line:
+            continue
+
+        if line.startswith("."):
+            toks = tokenize(line)
+            d = toks[0].lower()
+            if d == ".text":
+                section = "text"
+            elif d == ".data":
+                section = "data"
+            continue
+
+        while True:
+            if ":" not in line:
+                break
+            _, right = line.split(":", 1)
+            line = right.strip()
+            if not line:
+                break
+
+        if not line:
+            continue
+
+        toks = tokenize(line)
+        if toks[0].lower() != ".word" and section == "text":
+            pc_text += 1
+
+    return pc_text
+
 # First pass: define symbols and record their memory addresses
-def first_pass(lines: List[str], text_base: int = 0, data_base: int = 32) -> Tuple[List[Line], Dict[str, int]]:
+def first_pass(
+    lines: List[str],
+    text_base: int = 0,
+    data_base: Optional[int] = None,
+) -> Tuple[List[Line], Dict[str, int]]:
     """
     Builds symbol table (labels->addresses) and a structured line list with addresses.
-    Uses simple fixed placement:
+    Uses simple placement:
       .text starts at text_base
-      .data starts at data_base
+      .data starts at data_base if provided, otherwise immediately after .text
     """
+    if data_base is None:
+        data_base = text_base + count_text_words(lines)
+
     section = "text"
     pc_text = 0
     pc_data = 0
@@ -325,7 +367,7 @@ def main():
         src_lines = f.readlines()
 
     # declare base addresses for .text and .data sections and build symbol table
-    parsed, sym = first_pass(src_lines, text_base=0, data_base=32)
+    parsed, sym = first_pass(src_lines, text_base=0)
 
     # set memory depth and generate unified memory image (word-addressed) for $readmemh
     mem = second_pass(parsed, sym, mem_depth=64)

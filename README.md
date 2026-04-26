@@ -24,15 +24,38 @@ Run regression tests:
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
+Inspect the test layout:
+
+```sh
+sed -n '1,240p' tests/README.md
+```
+
 ## Repository Map
 
 - `compile.py`: C-subset compiler, including lexer, parser, AST, IR lowering, and custom assembly generation.
 - `assemble.py`: two-pass assembler for `.text`, `.data`, labels, instructions, and `.word` data.
 - `tests/basic/`: minimal checked example source, assembly, and memory images.
-- `tests/ir-regression/`: focused examples proving nested expressions, dynamic array stores, nested calls, and pointer-based calls.
+- `tests/feature-check/`: broad fixture-style smoke tests covering the supported surface area, grouped into `expressions/`, `arrays/`, `control-flow/`, and `calls/`.
+- `tests/ir-regression/`: focused examples proving nested expressions, dynamic array stores, nested calls, and pointer-based calls, grouped into `expressions/`, `arrays/`, and `calls/`.
 - `tests/label-check/`: control-flow label sanity check.
-- `tests/test_compiler.py`: semantic compiler tests with a small ISA interpreter.
-- `tmp/feature-check/`: manually useful feature smoke tests.
+- `tests/test_compiler.py`: semantic unit tests that compile source, assemble it, and execute it in a tiny ISA interpreter.
+- `tests/README.md`: guide to how the test directories fit together.
+
+## Test Strategy
+
+The repository uses two complementary test styles:
+
+- Fixture tests under `tests/basic/`, `tests/feature-check/`, `tests/ir-regression/`, and `tests/label-check/`.
+- Semantic unit tests in `tests/test_compiler.py`.
+
+The fixture tests are file-based. They keep `.c`, generated `.s`, and generated memory images side by side so you can inspect backend output directly after changes.
+
+The unit tests are behavior-based. They take a small C-subset program, run it through the compiler and assembler in-process, then execute the resulting machine words in a tiny interpreter that models the custom ISA. This is the fast path for catching semantic regressions such as register clobbering, bad lowering order, broken call plumbing, and incorrect pointer or array behavior.
+
+In short:
+
+- Use fixture tests when you want to inspect emitted artifacts.
+- Use unit tests when you want to assert meaning, not formatting.
 
 ## Supported C Subset
 
@@ -158,6 +181,17 @@ The compiler also performs a small practical optimization: if an expression is a
 
 The backend allocates global variables, locals, parameters, pointer slots, and IR temporaries into `.data` labels.
 
+In other words, named program storage lives in memory, not in registers. A
+variable such as `a`, `g`, `main_t0`, or `bump_p_ptr_x` gets a `.data` label
+and is loaded into a register only when an instruction needs it. Registers are
+used as short-lived working state during code generation; they are not the
+home location of source-level variables.
+
+As a small convenience optimization, compile-time constant local initializers
+in `main` may be written directly into the initial `.data` image instead of
+being emitted as runtime `LDI`/`ST` setup code. Non-constant initializers, and
+initializers in other functions, are still lowered as normal runtime code.
+
 This choice is simple and matches the current ISA constraints, but it has consequences:
 
 - No runtime stack is required.
@@ -179,6 +213,11 @@ The assembly generator lowers each IR instruction into custom ISA assembly using
 - `r7`: link register for `JL`/`JR` calls. Functions that make nested calls save and restore it through a statically allocated `.data` slot.
 
 Control flow lowers to labels and branches. Function calls store argument values into callee parameter slots, execute `JL r7, callee`, and read the return value from `r1`.
+
+This means the current compiler uses registers for transient computation only:
+operands, ALU results, computed addresses, dereference scratch, the return
+value, and the link register. If a value must survive beyond a short instruction
+sequence, it is normally written back to its `.data` slot.
 
 ## Assembler Architecture
 
@@ -215,16 +254,16 @@ The first pass:
 - Builds a symbol table for labels.
 - Supports labels on their own line or before content on the same line.
 
-Current fixed layout:
+Current default layout:
 
 ```text
 .text base = 0
-.data base = 32
+.data base = text_base + number of emitted text words
 demo memory image = 64 words
 actual ISA address space = 1024 words
 ```
 
-The current layout intentionally keeps the generated image small and easy to inspect for proof-of-concept testing. Starting `.data` at a fixed address keeps the examples simple, even though the underlying machine model has a 1024-word address space that could support a larger layout later.
+The current layout intentionally keeps the generated image small and easy to inspect for proof-of-concept testing. By default, the assembler places `.data` immediately after the emitted `.text` section so the layout is derived from actual program size rather than a hardcoded boundary.
 
 ### Second Pass
 
@@ -252,10 +291,10 @@ Basic compile example:
 
 IR regression examples:
 
-- `tests/ir-regression/nested-expr.c`: nested expression preservation, expected return `10`.
-- `tests/ir-regression/dynamic-array-store.c`: computed array store preserving RHS value, expected return `7`.
-- `tests/ir-regression/nested-calls.c`: nested function calls, expected return `9`.
-- `tests/ir-regression/ptr-and-for.c`: pointer-based calls with `for (int i = ...)`, expected return `3`.
+- `tests/ir-regression/expressions/nested-expr.c`: nested expression preservation, expected return `10`.
+- `tests/ir-regression/arrays/dynamic-array-store.c`: computed array store preserving RHS value, expected return `7`.
+- `tests/ir-regression/calls/nested-calls.c`: nested function calls, expected return `9`.
+- `tests/ir-regression/calls/ptr-and-for.c`: pointer-based calls with `for (int i = ...)`, expected return `3`.
 
 ## Testing Strategy
 
@@ -277,7 +316,7 @@ This catches semantic bugs that plain assembly snapshot tests can miss, includin
 
 The generated assembly includes `.global main`, but the assembler currently records labels only; it does not insert startup code. If hardware always starts executing at address `0`, either emit `main` first or add a startup jump/call to `main`.
 
-The fixed `.data` base at address `31` means larger programs can collide with data or exceed the 64-word demo memory image. For larger examples, the assembler layout should become configurable or derive data placement from actual text size.
+The current 64-word demo memory image means larger programs can still collide with data or exceed the available space. For larger examples, the assembler memory depth should become configurable.
 
 ## References
 

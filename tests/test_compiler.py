@@ -1,3 +1,11 @@
+"""Semantic regression tests for the compiler pipeline.
+
+These tests compile small source snippets all the way to custom assembly,
+assemble them into machine words, and execute those words in a tiny in-process
+ISA interpreter. The goal is to catch behavioral regressions in integrated
+compiler output, not just parser-level mistakes.
+"""
+
 import unittest
 
 import assemble
@@ -36,17 +44,20 @@ def s16(value):
 
 
 def compile_to_asm(src):
+    """Run lexing, parsing, and code generation for one source snippet."""
     tokens = ccompiler.lex(src)
     prog = ccompiler.Parser(tokens).parse_program()
     return ccompiler.CodeGen(prog).generate()
 
 
 def assemble_text(asm):
-    parsed, symbols = assemble.first_pass(asm.splitlines(), text_base=0, data_base=32)
+    """Assemble generated assembly into a 64-word image plus symbol table."""
+    parsed, symbols = assemble.first_pass(asm.splitlines(), text_base=0)
     return assemble.second_pass(parsed, symbols, mem_depth=64), symbols
 
 
 def run_words(mem, start_pc=0, max_steps=1000):
+    """Execute the custom ISA directly in Python until HALT."""
     mem = list(mem)
     regs = [0] * 8
     pc = start_pc
@@ -121,13 +132,14 @@ def run_words(mem, start_pc=0, max_steps=1000):
 
 
 def run_source(src):
+    """Compile, assemble, and execute one source program from main()."""
     asm = compile_to_asm(src)
     mem, symbols = assemble_text(asm)
     regs, final_mem = run_words(mem, start_pc=symbols.get("main", 0))
     return s16(regs[1]), final_mem, symbols, asm
 
 
-class CompilerRegressionTests(unittest.TestCase):
+class CompilerSemanticTests(unittest.TestCase):
     def test_basic_addition(self):
         ret, _, _, _ = run_source(
             """
@@ -206,6 +218,8 @@ class CompilerRegressionTests(unittest.TestCase):
         )
         self.assertEqual(ret, 5)
 
+
+class CompilerRejectionTests(unittest.TestCase):
     def test_cpp_reference_parameter_syntax_is_rejected(self):
         with self.assertRaises(SyntaxError):
             compile_to_asm(
@@ -222,6 +236,8 @@ class CompilerRegressionTests(unittest.TestCase):
                 """
             )
 
+
+class CompilerLoweringAndScopeTests(unittest.TestCase):
     def test_for_loop_decl_collects_initializer_symbol(self):
         ret, _, _, _ = run_source(
             """

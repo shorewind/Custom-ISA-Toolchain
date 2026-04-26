@@ -5,6 +5,13 @@ Each `.c` file has generated `.s`, `.memh`, and `.memb` outputs beside it so
 changes in parsing, IR lowering, code generation, or assembly encoding can be
 inspected directly.
 
+The fixtures are grouped by surface area:
+
+- `expressions/`: scalar arithmetic and bitwise expressions.
+- `arrays/`: constant-index and computed-index array access.
+- `control-flow/`: relational tests plus `if`, `while`, and `for`.
+- `calls/`: pass-by-value and pointer-based call plumbing.
+
 This set is comprehensive in the practical sense that it touches every major
 language feature and backend path the toolchain currently claims to support:
 
@@ -22,16 +29,16 @@ other corner cases.
 
 ## Per-test purpose
 
-- `arithmetic.c`: proves scalar locals/global storage plus `+`, `-`, `&`, and `|`.
-- `array-static.c`: proves constant-index array store/load code paths.
-- `array-dynamic.c`: proves computed index lowering and address arithmetic.
-- `if-else-geq.c`: proves conditional branching with `>=`.
-- `while-lt.c`: proves loop back-edges with `<`.
-- `for-leq.c`: proves `for` lowering with explicit init/update and `<=`.
-- `for-init-decl.c`: proves `for (int i = ...)` declaration handling.
-- `relops.c`: proves repeated conditional lowering for `==`, `!=`, and `>`.
-- `value-param.c`: proves pass-by-value call setup does not mutate the caller.
-- `ptr-param.c`: proves C-style pointer parameter passing with `&x` and `*x`.
+- `expressions/arithmetic.c`: proves scalar locals/global storage plus `+`, `-`, `&`, and `|`.
+- `arrays/array-static.c`: proves constant-index array store/load code paths.
+- `arrays/array-dynamic.c`: proves computed index lowering and address arithmetic.
+- `control-flow/if-else-geq.c`: proves conditional branching with `>=`.
+- `control-flow/while-lt.c`: proves loop back-edges with `<`.
+- `control-flow/for-leq.c`: proves `for` lowering with explicit init/update and `<=`.
+- `control-flow/for-init-decl.c`: proves `for (int i = ...)` declaration handling.
+- `control-flow/relops.c`: proves repeated conditional lowering for `==`, `!=`, and `>`.
+- `calls/value-param.c`: proves pass-by-value call setup does not mutate the caller.
+- `calls/ptr-param.c`: proves C-style pointer parameter passing with `&x` and `*x`.
 
 ## Why this is enough for the supported subset
 

@@ -574,9 +574,6 @@ class IRGen:
     def emit(self, instr: IRInstr) -> None:
         self.instrs.append(instr)
 
-    def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
-        return const_eval_expr(expr)
-
     def emit_expr(self, expr: Expr) -> IRValue:
         # General expression lowering returns a reusable value. Complex
         # expressions materialize into temporaries so later operations can reload
@@ -687,8 +684,7 @@ class IRGen:
     def emit_stmt(self, st: Stmt) -> None:
         if st.kind == "decl":
             if st.decl is not None and st.decl.init is not None:
-                # main's constant local initializers are emitted directly into .data.
-                if self.current_fn == "main" and self.const_eval(st.decl.init) is not None:
+                if self.current_fn == "main" and const_eval_expr(st.decl.init) is not None:
                     return
                 self.emit_expr_to(st.decl.init, st.decl.name)
             return
@@ -831,13 +827,11 @@ class SymbolInfo:
 class CodeGen:
     def __init__(self, prog: Program) -> None:
         self.prog = prog
-        self.ir_prog: Optional[IRProgram] = None
         self.ir_by_name: Dict[str, IRFunction] = {}
         self.lines: List[str] = []
 
         self.global_symbols: Dict[str, SymbolInfo] = {}
         self.func_symbols: Dict[str, Dict[str, SymbolInfo]] = {}
-        self.func_params: Dict[str, List[Param]] = {}
         self.func_by_name: Dict[str, Function] = {}
 
         # Data layout entries in emission order.
@@ -879,9 +873,6 @@ class CodeGen:
             self.add_data_word(helper, target_label)  # .word pointing at target_label itself
         return self.addr_helpers[target_label]
 
-    def const_eval(self, expr: Optional[Expr]) -> Optional[int]:
-        return const_eval_expr(expr)
-
     def require_fields(self, instr: IRInstr, *fields: str) -> List[object]:
         values: List[object] = []
         for field in fields:
@@ -899,7 +890,7 @@ class CodeGen:
             local_map[d.name] = SymbolInfo(kind="scalar", label=lbl, size=1)
             self.add_data_word(lbl, 0)
             if fn_name == "main":
-                k = self.const_eval(d.init)
+                k = const_eval_expr(d.init)
                 if k is not None:
                     self.set_data_word(lbl, k)
         else:
@@ -941,7 +932,6 @@ class CodeGen:
             self.func_by_name[fn.name] = fn
             local_map: Dict[str, SymbolInfo] = {}
             self.func_symbols[fn.name] = local_map
-            self.func_params[fn.name] = fn.params
 
             ir_fn = self.ir_by_name.get(fn.name)
             # main exits via HALT so never needs r7 saved; other callers must save r7
@@ -1181,8 +1171,8 @@ class CodeGen:
         raise ValueError(f"Unsupported IR instruction: {instr.op}")
 
     def generate(self) -> str:
-        self.ir_prog = IRGen(self.prog).generate()
-        self.collect_symbols(self.ir_prog)
+        ir_prog = IRGen(self.prog).generate()
+        self.collect_symbols(ir_prog)
 
         self.emit(".text")
         self.emit(".global main")  # entry point for the assembler
