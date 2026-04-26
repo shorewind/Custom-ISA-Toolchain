@@ -24,9 +24,8 @@ Supported subset:
   - Relational operators in conditions: ==, !=, >, <=, <, >=
 - Functions:
   - return expression;
-  - parameters by value, by pointer (C: int *x), or by reference (C++: int &x)
+  - parameters by value or by pointer (C: int *x)
   - by-pointer: caller passes &var, callee uses *x to read/write through the pointer
-  - by-reference: compiler handles address-taking and dereferencing implicitly
 
 Important codegen note:
 - This ISA/toolchain has no hardware stack pointer in the exposed subset, so
@@ -80,8 +79,7 @@ class VarDecl:
 @dataclass
 class Param:
     name: str
-    by_ref: bool = False   # C++ int &x: compiler implicitly dereferences
-    by_ptr: bool = False   # C   int *x: caller passes &var, callee uses *x explicitly
+    by_ptr: bool = False   # C int *x: caller passes &var, callee uses *x explicitly
 
 
 @dataclass
@@ -243,20 +241,15 @@ class Parser:
             return params
 
         while True:
-            by_ref = False
             by_ptr = False
 
             self.take("int")
-            # accept "int &x" (C++ reference) or "int *x" (C pointer) for indirect params
-            if self.peek() == "&":
-                self.take("&")
-                by_ref = True
-            elif self.peek() == "*":
+            if self.peek() == "*":
                 self.take("*")
                 by_ptr = True
             name = self.take_ident()
 
-            params.append(Param(name=name, by_ref=by_ref, by_ptr=by_ptr))
+            params.append(Param(name=name, by_ptr=by_ptr))
 
             if self.peek() == ",":
                 self.take(",")
@@ -624,23 +617,6 @@ class IRGen:
 
         raise ValueError(f"Unsupported expression kind: {expr.kind}")
 
-    def emit_lvalue_address(self, expr: Expr, callee: str, param_name: str) -> IRValue:
-        # by-reference args pass the caller's slot address; the callee writes through it
-        if expr.kind == "var":
-            dst = self.new_temp()
-            self.emit(IRInstr(op="addr", dst=dst, name=expr.name))
-            return dst
-
-        if expr.kind == "array":
-            index = self.emit_expr(expr.index)
-            dst = self.new_temp()
-            self.emit(IRInstr(op="addr", dst=dst, name=expr.name, index=index))
-            return dst
-
-        raise SyntaxError(
-            f"By-reference parameter '{param_name}' in call to '{callee}' requires an lvalue"
-        )
-
     def emit_call(self, call_expr: Expr) -> IRValue:
         callee = call_expr.name or ""
         callee_fn = self.func_by_name.get(callee)
@@ -654,13 +630,8 @@ class IRGen:
             )
 
         lowered_args: List[IRValue] = []
-        for p, a in zip(callee_fn.params, args):
-            if p.by_ref:
-                # A by-reference argument is lowered to the address of an
-                # lvalue; the callee's param_ref slot stores that address.
-                lowered_args.append(self.emit_lvalue_address(a, callee, p.name))
-            else:
-                lowered_args.append(self.emit_expr(a))
+        for _, a in zip(callee_fn.params, args):
+            lowered_args.append(self.emit_expr(a))
 
         dst = self.new_temp()
         self.emit(IRInstr(op="call", dst=dst, name=callee, args=lowered_args))
@@ -852,7 +823,7 @@ class IRGen:
 # -----------------------------------------------------------------------------
 @dataclass
 class SymbolInfo:
-    kind: str  # scalar, array, param_val, param_ref
+    kind: str  # scalar, array, param_val, param_ptr
     label: str
     size: int = 1
 
@@ -982,11 +953,7 @@ class CodeGen:
             for p in fn.params:
                 if p.name in local_map:
                     raise NameError(f"Duplicate parameter in {fn.name}: {p.name}")
-                if p.by_ref:
-                    slot = f"{fn.name}_p_ref_{p.name}"
-                    local_map[p.name] = SymbolInfo(kind="param_ref", label=slot, size=1)
-                    self.add_data_word(slot, 0)
-                elif p.by_ptr:
+                if p.by_ptr:
                     slot = f"{fn.name}_p_ptr_{p.name}"
                     local_map[p.name] = SymbolInfo(kind="param_ptr", label=slot, size=1)
                     self.add_data_word(slot, 0)
@@ -1025,20 +992,12 @@ class CodeGen:
         if info.kind in ("scalar", "param_val", "param_ptr"):
             self.emit(f"    LD    {target}, {info.label}(r0)")
             return
-        if info.kind == "param_ref":
-            self.emit(f"    LD    r6, {info.label}(r0)")  # load caller's slot address from param
-            self.emit(f"    LD    {target}, 0(r6)")       # dereference to get caller's value
-            return
         raise ValueError(f"Cannot read array variable '{name}' without index")
 
     def emit_store_scalar(self, fn: str, name: str, src: str) -> None:
         info = self.lookup_symbol(fn, name)
         if info.kind in ("scalar", "param_val", "param_ptr"):
             self.emit(f"    ST    {src}, {info.label}(r0)")
-            return
-        if info.kind == "param_ref":
-            self.emit(f"    LD    r6, {info.label}(r0)")  # load caller's slot address
-            self.emit(f"    ST    {src}, 0(r6)")          # write through the pointer
             return
         raise ValueError(f"Cannot assign array variable '{name}' without index")
 
@@ -1057,9 +1016,6 @@ class CodeGen:
         if info.kind in ("scalar", "param_val", "param_ptr"):
             helper = self.addr_helper_label(info.label)
             self.emit(f"    LD    {target}, {helper}(r0)")
-            return
-        if info.kind == "param_ref":
-            self.emit(f"    LD    {target}, {info.label}(r0)")
             return
         raise ValueError(f"Cannot take scalar address of array '{name}'")
 
@@ -1126,10 +1082,11 @@ class CodeGen:
 
         # Preserve r7 around the call: JL will overwrite it with the new return address.
         if self.fn_needs_saved_r7.get(fn, False):
-            self.emit(f"    ST    r7, {self.fn_saved_r7_label(fn)}(r0)")
+            saved_lbl = self.fn_saved_r7_label(fn)
+            self.emit(f"    ST    r7, {saved_lbl}(r0)")
         self.emit(f"    JL    r7, {callee}")
         if self.fn_needs_saved_r7.get(fn, False):
-            self.emit(f"    LD    r7, {self.fn_saved_r7_label(fn)}(r0)")
+            self.emit(f"    LD    r7, {saved_lbl}(r0)")
 
         if instr.dst is not None:
             self.emit_store_scalar(fn, instr.dst, "r1")
@@ -1170,8 +1127,8 @@ class CodeGen:
         if instr.op == "deref_load":
             dst, name = self.require_fields(instr, "dst", "name")
             info = self.lookup_symbol(fn, name)
-            self.emit(f"    LD    r6, {info.label}(r0)")  # load pointer from slot
-            self.emit(f"    LD    r3, 0(r6)")             # dereference
+            self.emit(f"    LD    r5, {info.label}(r0)")  # load pointer from slot
+            self.emit(f"    LD    r3, 0(r5)")             # dereference
             self.emit_store_scalar(fn, dst, "r3")
             return
 
@@ -1179,8 +1136,8 @@ class CodeGen:
             name, src = self.require_fields(instr, "name", "src")
             info = self.lookup_symbol(fn, name)
             self.emit_load_operand(fn, src, "r3")          # load value to write
-            self.emit(f"    LD    r6, {info.label}(r0)")   # load pointer from slot
-            self.emit(f"    ST    r3, 0(r6)")              # write through pointer
+            self.emit(f"    LD    r5, {info.label}(r0)")   # load pointer from slot
+            self.emit(f"    ST    r3, 0(r5)")              # write through pointer
             return
 
         if instr.op == "addr":
