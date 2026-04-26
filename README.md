@@ -29,7 +29,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 - `compile.py`: C-subset compiler, including lexer, parser, AST, IR lowering, and custom assembly generation.
 - `assemble.py`: two-pass assembler for `.text`, `.data`, labels, instructions, and `.word` data.
 - `tests/basic/`: minimal checked example source, assembly, and memory images.
-- `tests/ir-regression/`: focused examples proving nested expressions, dynamic array stores, nested calls, and by-reference calls.
+- `tests/ir-regression/`: focused examples proving nested expressions, dynamic array stores, nested calls, and pointer-based calls.
 - `tests/label-check/`: control-flow label sanity check.
 - `tests/test_compiler.py`: semantic compiler tests with a small ISA interpreter.
 - `tmp/feature-check/`: manually useful feature smoke tests.
@@ -83,13 +83,11 @@ int inc(int x) {
     return x + 1;
 }
 
-int bump(int &x) {
-    x = x + 1;
-    return x;
+int bump(int *x) {
+    *x = *x + 1;
+    return *x;
 }
 ```
-
-By-reference parameters are accepted as `int &x`.
 
 ## Unsupported C Features
 
@@ -97,7 +95,7 @@ This is not a full C compiler. These are intentionally unsupported:
 
 - Types other than `int`.
 - `void`, `char`, `long`, `unsigned`, strings, structs, and general pointers.
-- General pointer arithmetic, except the internal address handling used for arrays and by-reference parameters.
+- General pointer arithmetic, except the internal address handling used for arrays and pointer parameters.
 - `break`, `continue`, `switch`, `do while`, `goto`, and ternary expressions.
 - Relational operators as value-producing expressions, such as `x = a < b;`.
 - Function prototypes, separate translation units, includes, and preprocessing.
@@ -158,7 +156,7 @@ The compiler also performs a small practical optimization: if an expression is a
 
 ### 4. Symbol and Storage Layout
 
-The backend allocates global variables, locals, parameters, by-reference slots, and IR temporaries into `.data` labels.
+The backend allocates global variables, locals, parameters, pointer slots, and IR temporaries into `.data` labels.
 
 This choice is simple and matches the current ISA constraints, but it has consequences:
 
@@ -171,12 +169,14 @@ This choice is simple and matches the current ISA constraints, but it has conseq
 
 The assembly generator lowers each IR instruction into custom ISA assembly using a small scratch-register convention:
 
-- `r0`: hardwired zero by convention.
-- `r1`: expression/return value register.
-- `r2`: secondary operand/index register.
-- `r3`: result/store scratch register.
-- `r4`, `r5`, `r6`: address and by-reference scratch registers.
-- `r7`: link register for `JL`/`JR` calls.
+- `r0`: hardwired zero by convention. Used as the base register for symbolic data accesses such as `main_a(r0)`, and for unconditional branches written as `BEZ r0, label`.
+- `r1`: primary value register. Holds the left operand for binary operations and the final function return value.
+- `r2`: secondary value register. Holds the right operand for binary operations and computed array indices.
+- `r3`: general result/store scratch register. Receives ALU results, temporary loaded values, compare results for conditional branches, and staged call arguments before they are written to parameter slots.
+- `r4`: computed array-element address register for dynamic array loads and stores.
+- `r5`: pointer/address scratch register. Used to load helper addresses such as `addr_a`, and to dereference pointer parameters for `*x` loads and stores.
+- `r6`: currently unused by the compiler. Reserved as extra scratch space for future address-heavy or pointer-heavy code generation.
+- `r7`: link register for `JL`/`JR` calls. Functions that make nested calls save and restore it through a statically allocated `.data` slot.
 
 Control flow lowers to labels and branches. Function calls store argument values into callee parameter slots, execute `JL r7, callee`, and read the return value from `r1`.
 
@@ -219,7 +219,7 @@ Current fixed layout:
 
 ```text
 .text base = 0
-.data base = 31
+.data base = 32
 demo memory image = 64 words
 actual ISA address space = 1024 words
 ```
@@ -255,7 +255,7 @@ IR regression examples:
 - `tests/ir-regression/nested-expr.c`: nested expression preservation, expected return `10`.
 - `tests/ir-regression/dynamic-array-store.c`: computed array store preserving RHS value, expected return `7`.
 - `tests/ir-regression/nested-calls.c`: nested function calls, expected return `9`.
-- `tests/ir-regression/ref-and-for.c`: by-reference calls with `for (int i = ...)`, expected return `3`.
+- `tests/ir-regression/ptr-and-for.c`: pointer-based calls with `for (int i = ...)`, expected return `3`.
 
 ## Testing Strategy
 
