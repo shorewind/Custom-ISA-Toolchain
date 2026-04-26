@@ -51,9 +51,9 @@ def compile_to_asm(src):
 
 
 def assemble_text(asm):
-    """Assemble generated assembly into a 64-word image plus symbol table."""
+    """Assemble generated assembly into a 1024-word image plus symbol table."""
     parsed, symbols = assemble.first_pass(asm.splitlines(), text_base=0)
-    return assemble.second_pass(parsed, symbols, mem_depth=64), symbols
+    return assemble.second_pass(parsed, symbols, mem_depth=1024), symbols
 
 
 def run_words(mem, start_pc=0, max_steps=1000):

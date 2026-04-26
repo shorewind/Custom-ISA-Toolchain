@@ -259,7 +259,7 @@ Current default layout:
 ```text
 .text base = 0
 .data base = text_base + number of emitted text words
-demo memory image = 64 words
+default memory image = 1024 words
 actual ISA address space = 1024 words
 ```
 
@@ -271,7 +271,7 @@ The second pass:
 
 - Encodes instructions into 16-bit words.
 - Resolves labels in branches, jumps, memory operands, and `.word` directives.
-- Emits a unified 64-word memory image in hex.
+- Emits a unified 1024-word memory image in hex.
 
 The assembler supports these instruction groups:
 
@@ -316,7 +316,7 @@ This catches semantic bugs that plain assembly snapshot tests can miss, includin
 
 The generated assembly includes `.global main`, but the assembler currently records labels only; it does not insert startup code. If hardware always starts executing at address `0`, either emit `main` first or add a startup jump/call to `main`.
 
-The current 64-word demo memory image means larger programs can still collide with data or exceed the available space. For larger examples, the assembler memory depth should become configurable.
+The current default memory image spans the full 1024-word address space. Larger examples may still need a configurable depth later if the ISA model changes, but the demo toolchain no longer truncates images to 64 words.
 
 ## References
 

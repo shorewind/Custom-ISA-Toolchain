@@ -319,7 +319,7 @@ def encode_instruction(toks: List[str], sym: Dict[str, int], pc: int) -> int:
     raise ValueError(f"Unknown/unsupported instruction: {mnem}")
 
 # Second pass: translate instructions and resolve symbols into machine code
-def second_pass(parsed: List[Line], sym: Dict[str, int], mem_depth: int = 64) -> List[int]:
+def second_pass(parsed: List[Line], sym: Dict[str, int], mem_depth: int = 1024) -> List[int]:
     """
     Produces a unified memory image (word-addressed) suitable for $readmemh.
     .text instructions and .data words share the same address space.
@@ -370,7 +370,7 @@ def main():
     parsed, sym = first_pass(src_lines, text_base=0)
 
     # set memory depth and generate unified memory image (word-addressed) for $readmemh
-    mem = second_pass(parsed, sym, mem_depth=64)
+    mem = second_pass(parsed, sym, mem_depth=1024)
 
     with open(out_path, "w") as f:
         for w in mem:
