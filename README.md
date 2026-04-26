@@ -18,6 +18,14 @@ Assemble custom assembly to a hex memory image:
 python3 assemble.py tests/basic/assembly-example.s tests/basic/imem-example.memh
 ```
 
+Run the whole C -> assembly -> unified memory flow in one step:
+
+```sh
+python3 build.py tests/basic/c-example.c
+```
+
+This writes `tests/basic/c-example.s`, `tests/basic/c-example.memh`, and `tests/basic/c-example.memb`.
+
 Run regression tests:
 
 ```sh
