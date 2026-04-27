@@ -1,0 +1,378 @@
+VSIM23> run -all
+# Loaded .memb: test-case.memb
+# 
+# ==== MEMORY BEFORE RUN ====
+# 
+# ==== MEMORY [0:63] ====
+# MEM[0] = 0x408f (16527)
+# MEM[1] = 0x4110 (16656)
+# MEM[2] = 0x0532 (1330)
+# MEM[3] = 0x2191 (8593)
+# MEM[4] = 0x408f (16527)
+# MEM[5] = 0x4110 (16656)
+# MEM[6] = 0x0536 (1334)
+# MEM[7] = 0x2192 (8594)
+# MEM[8] = 0x4091 (16529)
+# MEM[9] = 0x4112 (16658)
+# MEM[10] = 0x0534 (1332)
+# MEM[11] = 0x218e (8590)
+# MEM[12] = 0x408e (16526)
+# MEM[13] = 0x000e (14)
+# MEM[14] = 0x0000 (0)
+# MEM[15] = 0x0005 (5)
+# MEM[16] = 0x0002 (2)
+# MEM[17] = 0x0000 (0)
+# MEM[18] = 0x0000 (0)
+# MEM[19] = 0x0000 (0)
+# MEM[20] = 0x0000 (0)
+# MEM[21] = 0x0000 (0)
+# MEM[22] = 0x0000 (0)
+# MEM[23] = 0x0000 (0)
+# MEM[24] = 0x0000 (0)
+# MEM[25] = 0x0000 (0)
+# MEM[26] = 0x0000 (0)
+# MEM[27] = 0x0000 (0)
+# MEM[28] = 0x0000 (0)
+# MEM[29] = 0x0000 (0)
+# MEM[30] = 0x0000 (0)
+# MEM[31] = 0x0000 (0)
+# MEM[32] = 0x0000 (0)
+# MEM[33] = 0x0000 (0)
+# MEM[34] = 0x0000 (0)
+# MEM[35] = 0x0000 (0)
+# MEM[36] = 0x0000 (0)
+# MEM[37] = 0x0000 (0)
+# MEM[38] = 0x0000 (0)
+# MEM[39] = 0x0000 (0)
+# MEM[40] = 0x0000 (0)
+# MEM[41] = 0x0000 (0)
+# MEM[42] = 0x0000 (0)
+# MEM[43] = 0x0000 (0)
+# MEM[44] = 0x0000 (0)
+# MEM[45] = 0x0000 (0)
+# MEM[46] = 0x0000 (0)
+# MEM[47] = 0x0000 (0)
+# MEM[48] = 0x0000 (0)
+# MEM[49] = 0x0000 (0)
+# MEM[50] = 0x0000 (0)
+# MEM[51] = 0x0000 (0)
+# MEM[52] = 0x0000 (0)
+# MEM[53] = 0x0000 (0)
+# MEM[54] = 0x0000 (0)
+# MEM[55] = 0x0000 (0)
+# MEM[56] = 0x0000 (0)
+# MEM[57] = 0x0000 (0)
+# MEM[58] = 0x0000 (0)
+# MEM[59] = 0x0000 (0)
+# MEM[60] = 0x0000 (0)
+# MEM[61] = 0x0000 (0)
+# MEM[62] = 0x0000 (0)
+# MEM[63] = 0x0000 (0)
+# ----- t=0 (RESET ACTIVE) -----
+# PC = x
+# -----------------------------
+# 
+# ----- t=10 (RESET ACTIVE) -----
+# PC = 0
+# -----------------------------
+# 
+# ----- t=20 -----
+# PC     = 0
+# INSTR  = 0x408f
+# DECODE : opcode=010 rs=0 rt=1 rd=0 funct=111 iflag=1
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=15 -> y=15 zero=0
+# WB     : write_reg=1 wb_data=5 reg_write=1
+# REGS   : r0=0 r1=5 r2=0 r3=0 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=30 -----
+# PC     = 1
+# INSTR  = 0x4110
+# DECODE : opcode=010 rs=0 rt=2 rd=1 funct=000 iflag=0
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=16 -> y=16 zero=0
+# WB     : write_reg=2 wb_data=2 reg_write=1
+# REGS   : r0=0 r1=5 r2=0 r3=0 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=40 -----
+# PC     = 2
+# INSTR  = 0x0532
+# DECODE : opcode=000 rs=1 rt=2 rd=3 funct=001 iflag=0
+# CONTROL: alu_op=010 reg_dst=001 alu_src=0 mem_to_reg=0 reg_write=1 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=5 alu_b(b)=2 -> y=3 zero=0
+# WB     : write_reg=3 wb_data=3 reg_write=1
+# REGS   : r0=0 r1=5 r2=2 r3=0 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=50 -----
+# PC     = 3
+# INSTR  = 0x2191
+# DECODE : opcode=001 rs=0 rt=3 rd=1 funct=000 iflag=1
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=1 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=17 -> y=17 zero=0
+# WB     : write_reg=3 wb_data=17 reg_write=0
+# REGS   : r0=0 r1=5 r2=2 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=60 -----
+# PC     = 4
+# INSTR  = 0x408f
+# DECODE : opcode=010 rs=0 rt=1 rd=0 funct=111 iflag=1
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=15 -> y=15 zero=0
+# WB     : write_reg=1 wb_data=5 reg_write=1
+# REGS   : r0=0 r1=5 r2=2 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=70 -----
+# PC     = 5
+# INSTR  = 0x4110
+# DECODE : opcode=010 rs=0 rt=2 rd=1 funct=000 iflag=0
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=16 -> y=16 zero=0
+# WB     : write_reg=2 wb_data=2 reg_write=1
+# REGS   : r0=0 r1=5 r2=2 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=80 -----
+# PC     = 6
+# INSTR  = 0x0536
+# DECODE : opcode=000 rs=1 rt=2 rd=3 funct=011 iflag=0
+# CONTROL: alu_op=100 reg_dst=001 alu_src=0 mem_to_reg=0 reg_write=1 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=5 alu_b(b)=2 -> y=7 zero=0
+# WB     : write_reg=3 wb_data=7 reg_write=1
+# REGS   : r0=0 r1=5 r2=2 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=90 -----
+# PC     = 7
+# INSTR  = 0x2192
+# DECODE : opcode=001 rs=0 rt=3 rd=1 funct=001 iflag=0
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=1 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=18 -> y=18 zero=0
+# WB     : write_reg=3 wb_data=18 reg_write=0
+# REGS   : r0=0 r1=5 r2=2 r3=7 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=100 -----
+# PC     = 8
+# INSTR  = 0x4091
+# DECODE : opcode=010 rs=0 rt=1 rd=1 funct=000 iflag=1
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=17 -> y=17 zero=0
+# WB     : write_reg=1 wb_data=3 reg_write=1
+# REGS   : r0=0 r1=5 r2=2 r3=7 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=110 -----
+# PC     = 9
+# INSTR  = 0x4112
+# DECODE : opcode=010 rs=0 rt=2 rd=1 funct=001 iflag=0
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=18 -> y=18 zero=0
+# WB     : write_reg=2 wb_data=7 reg_write=1
+# REGS   : r0=0 r1=3 r2=2 r3=7 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=120 -----
+# PC     = 10
+# INSTR  = 0x0534
+# DECODE : opcode=000 rs=1 rt=2 rd=3 funct=010 iflag=0
+# CONTROL: alu_op=011 reg_dst=001 alu_src=0 mem_to_reg=0 reg_write=1 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=3 alu_b(b)=7 -> y=3 zero=0
+# WB     : write_reg=3 wb_data=3 reg_write=1
+# REGS   : r0=0 r1=3 r2=7 r3=7 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=0
+# -----------------------------
+# 
+# ----- t=130 -----
+# PC     = 11
+# INSTR  = 0x218e
+# DECODE : opcode=001 rs=0 rt=3 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=1 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=14 -> y=14 zero=0
+# WB     : write_reg=3 wb_data=14 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=140 -----
+# PC     = 12
+# INSTR  = 0x408e
+# DECODE : opcode=010 rs=0 rt=1 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=001 reg_dst=000 alu_src=1 mem_to_reg=1 reg_write=1 mem_read=1 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=0
+# ALU    : vrs(a)=0 alu_b(b)=14 -> y=14 zero=0
+# WB     : write_reg=1 wb_data=3 reg_write=1
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=150 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=160 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=170 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=180 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=190 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=200 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# ----- t=210 -----
+# PC     = 13
+# INSTR  = 0x000e
+# DECODE : opcode=000 rs=0 rt=0 rd=0 funct=111 iflag=0
+# CONTROL: alu_op=000 reg_dst=000 alu_src=0 mem_to_reg=0 reg_write=0 mem_read=0 mem_write=0 branch_eq=0 branch_ne=0 imm_jump=0 reg_jump=0 return_link=0 halt=1
+# ALU    : vrs(a)=0 alu_b(b)=0 -> y=0 zero=1
+# WB     : write_reg=0 wb_data=0 reg_write=0
+# REGS   : r0=0 r1=3 r2=7 r3=3 r4=0 r5=0 r6=0 r7=0
+# MEM    : M[14]=3
+# -----------------------------
+# 
+# 
+# ==== FINAL REGISTERS ====
+# R0 = 0x0000 (0)
+# R1 = 0x0003 (3)
+# R2 = 0x0007 (7)
+# R3 = 0x0003 (3)
+# R4 = 0x0000 (0)
+# R5 = 0x0000 (0)
+# R6 = 0x0000 (0)
+# R7 = 0x0000 (0)
+# 
+# ==== MEMORY AFTER RUN ====
+# 
+# ==== MEMORY [0:63] ====
+# MEM[0] = 0x408f (16527)
+# MEM[1] = 0x4110 (16656)
+# MEM[2] = 0x0532 (1330)
+# MEM[3] = 0x2191 (8593)
+# MEM[4] = 0x408f (16527)
+# MEM[5] = 0x4110 (16656)
+# MEM[6] = 0x0536 (1334)
+# MEM[7] = 0x2192 (8594)
+# MEM[8] = 0x4091 (16529)
+# MEM[9] = 0x4112 (16658)
+# MEM[10] = 0x0534 (1332)
+# MEM[11] = 0x218e (8590)
+# MEM[12] = 0x408e (16526)
+# MEM[13] = 0x000e (14)
+# MEM[14] = 0x0003 (3)
+# MEM[15] = 0x0005 (5)
+# MEM[16] = 0x0002 (2)
+# MEM[17] = 0x0003 (3)
+# MEM[18] = 0x0007 (7)
+# MEM[19] = 0x0000 (0)
+# MEM[20] = 0x0000 (0)
+# MEM[21] = 0x0000 (0)
+# MEM[22] = 0x0000 (0)
+# MEM[23] = 0x0000 (0)
+# MEM[24] = 0x0000 (0)
+# MEM[25] = 0x0000 (0)
+# MEM[26] = 0x0000 (0)
+# MEM[27] = 0x0000 (0)
+# MEM[28] = 0x0000 (0)
+# MEM[29] = 0x0000 (0)
+# MEM[30] = 0x0000 (0)
+# MEM[31] = 0x0000 (0)
+# MEM[32] = 0x0000 (0)
+# MEM[33] = 0x0000 (0)
+# MEM[34] = 0x0000 (0)
+# MEM[35] = 0x0000 (0)
+# MEM[36] = 0x0000 (0)
+# MEM[37] = 0x0000 (0)
+# MEM[38] = 0x0000 (0)
+# MEM[39] = 0x0000 (0)
+# MEM[40] = 0x0000 (0)
+# MEM[41] = 0x0000 (0)
+# MEM[42] = 0x0000 (0)
+# MEM[43] = 0x0000 (0)
+# MEM[44] = 0x0000 (0)
+# MEM[45] = 0x0000 (0)
+# MEM[46] = 0x0000 (0)
+# MEM[47] = 0x0000 (0)
+# MEM[48] = 0x0000 (0)
+# MEM[49] = 0x0000 (0)
+# MEM[50] = 0x0000 (0)
+# MEM[51] = 0x0000 (0)
+# MEM[52] = 0x0000 (0)
+# MEM[53] = 0x0000 (0)
+# MEM[54] = 0x0000 (0)
+# MEM[55] = 0x0000 (0)
+# MEM[56] = 0x0000 (0)
+# MEM[57] = 0x0000 (0)
+# MEM[58] = 0x0000 (0)
+# MEM[59] = 0x0000 (0)
+# MEM[60] = 0x0000 (0)
+# MEM[61] = 0x0000 (0)
+# MEM[62] = 0x0000 (0)
+# MEM[63] = 0x0000 (0)
+# ** Note: $finish    : C:/Users/aizha/Documents/isa/cpu_toolchain_tb.v(119)
+#    Time: 220 ns  Iteration: 0  Instance: /tb_cpu

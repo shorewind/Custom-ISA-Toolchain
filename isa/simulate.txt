@@ -1,0 +1,22 @@
+# Compile of cpu_toolchain_tb.v was successful.
+Questa> vsim -t ns -voptargs=+acc work.tb_cpu
+# vsim -t ns -voptargs="+acc" work.tb_cpu 
+# Start time: 11:33:54 on Apr 27,2026
+# ** Note: (vsim-3813) Design is being optimized due to module recompilation...
+# ** Warning: (vopt-10587) Some optimizations are turned off because the +acc switch is in effect. This will cause your simulation to run slowly. Please use -access/-debug to maintain needed visibility.
+# ** Note: (vsim-12126) Error and warning message counts have been restored: Errors=0, Warnings=1.
+# Loading work.tb_cpu(fast)
+# Loading work.cpu(fast)
+# Loading work.pc(fast)
+# Loading work.adder(fast)
+# Loading work.control_unit(fast)
+# Loading work.sign_extend(fast)
+# Loading work.sign_extend(fast__1)
+# Loading work.sign_extend(fast__2)
+# Loading work.mux(fast)
+# Loading work.mux(fast__1)
+# Loading work.reg_file(fast)
+# Loading work.alu(fast)
+# Loading work.unified_mem(fast)
+# Loading work.and_gate(fast)
+# Loading work.or_gate(fast)
