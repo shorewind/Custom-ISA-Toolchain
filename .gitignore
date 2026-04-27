@@ -9,6 +9,3 @@ env/
 
 # macOS Finder metadata
 .DS_Store
-
-# Reference files
-defs.vh
