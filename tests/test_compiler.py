@@ -1,9 +1,8 @@
-"""Semantic regression tests for the compiler pipeline.
-
-These tests compile small source snippets all the way to custom assembly,
-assemble them into machine words, and execute those words in a tiny in-process
-ISA interpreter. The goal is to catch behavioral regressions in integrated
-compiler output, not just parser-level mistakes.
+"""
+test_compiler.py: Unit tests for the compiler
+Definition: Semantic regression tests, rejection tests, and lowering/scope tests for the compiler.
+Usage:
+    python3 -m unittest tests/test_compiler.py
 """
 
 import unittest
@@ -11,7 +10,7 @@ import unittest
 import assemble
 import compile as ccompiler
 
-
+# opcodes and function codes for the custom ISA
 OP_R = 0b000
 OP_ST = 0b001
 OP_LD = 0b010
@@ -29,6 +28,9 @@ F_SLT = 0b100
 F_HALT = 0b111
 
 
+# -----------------------------------------------------------------------------
+# 1) HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
 def sext(value, bits):
     sign = 1 << (bits - 1)
     return value - (1 << bits) if value & sign else value
@@ -44,20 +46,20 @@ def s16(value):
 
 
 def compile_to_asm(src):
-    """Run lexing, parsing, and code generation for one source snippet."""
+    """run lexing, parsing, and code generation for one source snippet."""
     tokens = ccompiler.lex(src)
     prog = ccompiler.Parser(tokens).parse_program()
     return ccompiler.CodeGen(prog).generate()
 
 
 def assemble_text(asm):
-    """Assemble generated assembly into a 1024-word image plus symbol table."""
+    """assemble generated assembly into a 1024-word image plus symbol table."""
     parsed, symbols = assemble.first_pass(asm.splitlines(), text_base=0)
     return assemble.second_pass(parsed, symbols, mem_depth=1024), symbols
 
 
 def run_words(mem, start_pc=0, max_steps=1000):
-    """Execute the custom ISA directly in Python until HALT."""
+    """execute the custom isa directly in python until halt."""
     mem = list(mem)
     regs = [0] * 8
     pc = start_pc
@@ -132,13 +134,16 @@ def run_words(mem, start_pc=0, max_steps=1000):
 
 
 def run_source(src):
-    """Compile, assemble, and execute one source program from main()."""
+    """compile, assemble, and execute one source program from main()."""
     asm = compile_to_asm(src)
     mem, symbols = assemble_text(asm)
     regs, final_mem = run_words(mem, start_pc=symbols.get("main", 0))
     return s16(regs[1]), final_mem, symbols, asm
 
 
+# -----------------------------------------------------------------------------
+# 2) SEMANTIC REGRESSION TESTS
+# -----------------------------------------------------------------------------
 class CompilerSemanticTests(unittest.TestCase):
     def test_basic_addition(self):
         ret, _, _, _ = run_source(
@@ -219,6 +224,9 @@ class CompilerSemanticTests(unittest.TestCase):
         self.assertEqual(ret, 5)
 
 
+# -----------------------------------------------------------------------------
+# 3) REJECTION TESTS
+# -----------------------------------------------------------------------------
 class CompilerRejectionTests(unittest.TestCase):
     def test_cpp_reference_parameter_syntax_is_rejected(self):
         with self.assertRaises(SyntaxError):
@@ -237,6 +245,9 @@ class CompilerRejectionTests(unittest.TestCase):
             )
 
 
+# -----------------------------------------------------------------------------
+# 4) LOWERING AND SCOPE TESTS
+# -----------------------------------------------------------------------------
 class CompilerLoweringAndScopeTests(unittest.TestCase):
     def test_for_loop_decl_collects_initializer_symbol(self):
         ret, _, _, _ = run_source(

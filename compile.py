@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-compile.py: Tiny C -> custom ISA assembly compiler for an expanded C subset.
+compile.py: Compiler for 16-bit custom ISA
+Definition: 
+Converts a .c source file in the supported subset into assembly code for the custom ISA
+Usage: python3 compile.py <input.c> [output_base]
 
 Supported subset:
 - Declarations:
@@ -47,11 +50,12 @@ from typing import Dict, List, Optional, Union
 # -----------------------------------------------------------------------------
 TOKEN_RE = re.compile(
     r"\s*(<=|>=|==|!=|[A-Za-z_]\w*|\d+|[{}()\[\];,+\-=&|<>*])"
-)  # two-char operators listed first so alternation matches them before single-char prefixes
+)  # list two-char operators first so they match before single-char prefixes
 
 
 def lex(src: str) -> List[str]:
-    src = re.sub(r"//.*", "", src)  # strip // line comments before tokenizing
+    # strip // line comments before tokenizing
+    src = re.sub(r"//.*", "", src)
     toks: List[str] = []
     pos = 0
     while pos < len(src):
@@ -67,21 +71,22 @@ def lex(src: str) -> List[str]:
 
 
 # -----------------------------------------------------------------------------
-# 2) AST
+# 2) AST - abstract syntax tree for the supported C subset
 # -----------------------------------------------------------------------------
+# global or local variable declaration, including array declarations and optional initializers
 @dataclass
 class VarDecl:
     name: str
     size: int = 1
     init: Optional["Expr"] = None
 
-
+# function parameter, by value or by pointer (C: int *x)
 @dataclass
 class Param:
     name: str
-    by_ptr: bool = False   # C int *x: caller passes &var, callee uses *x explicitly
+    by_ptr: bool = False   # c int *x: caller passes &var, callee uses *x explicitly
 
-
+# general expression node, including literals, variables, binary ops, calls, array indexing, and pointer dereference/address-of
 @dataclass
 class Expr:
     kind: str
@@ -92,22 +97,22 @@ class Expr:
     args: Optional[List["Expr"]] = None
     index: Optional["Expr"] = None
 
-
+# condition in if/while/for, including relational ops and bare expressions treated as != 0
 @dataclass
 class Cond:
     left: Expr
     op: str
     right: Optional[Expr] = None
 
-
+# assignment statement, including optional array indexing and pointer dereference for the target
 @dataclass
 class Assign:
     target_name: str
     target_index: Optional[Expr]
     expr: Expr
-    target_deref: bool = False  # True for *x = expr (write through pointer)
+    target_deref: bool = False  # true for *x = expr (write through pointer)
 
-
+# general statement node, including declarations, assignments, blocks, if/else, while, for, and return
 @dataclass
 class Stmt:
     kind: str
@@ -121,14 +126,14 @@ class Stmt:
     update: Optional["Stmt"] = None
     expr: Optional[Expr] = None
 
-
+# function definition, including name, parameters, and body statements
 @dataclass
 class Function:
     name: str
     params: List[Param]
     body: List[Stmt]
 
-
+# entire program, including global variable declarations and function definitions
 @dataclass
 class Program:
     globals: List[VarDecl]
@@ -156,14 +161,14 @@ RELOP_FALSE_BRANCH = {
     ">=": ("SLT   r3, r1, r2", "BNZ"),
 }
 
-
+# evaluate binary operator on two constant operands at compile time for constant folding
 def eval_binary(op: str, left: int, right: int) -> int:
     fn = BINARY_FNS.get(op)
     if fn is None:
         raise ValueError(f"Unsupported binary operator: {op}")
     return fn(left, right)
 
-
+# evaluate an expression at compile time if it consists entirely of constants, otherwise return None
 def const_eval_expr(expr: Optional["Expr"]) -> Optional[int]:
     if expr is None:
         return None
@@ -177,7 +182,7 @@ def const_eval_expr(expr: Optional["Expr"]) -> Optional[int]:
         return eval_binary(expr.kind, left, right)
     return None
 
-
+# generate a label name with an optional offset for jumps to control flow structures like loops and conditionals
 def label_with_offset(label: str, offset: int) -> str:
     if offset == 0:
         return label
@@ -185,12 +190,13 @@ def label_with_offset(label: str, offset: int) -> str:
         return f"{label}+{offset}"
     return f"{label}{offset}"
 
-
+# parser for the supported C subset, producing an AST. The parser is a recursive descent parser with helper methods for different precedence levels of expressions and different statement types.
 class Parser:
     def __init__(self, tokens: List[str]) -> None:
         self.toks = tokens
         self.i = 0
 
+    # peek functions for looking ahead at the next token(s) without consuming them
     def peek(self) -> Optional[str]:
         return self.toks[self.i] if self.i < len(self.toks) else None
 
@@ -198,6 +204,7 @@ class Parser:
         j = self.i + n
         return self.toks[j] if j < len(self.toks) else None
 
+    # take functions for consuming the next token(s) and optionally checking that they match expected values
     def take(self, expected: Optional[str] = None) -> str:
         tok = self.peek()
         if tok is None:
@@ -218,10 +225,12 @@ class Parser:
         funcs: List[Function] = []
 
         while self.peek() is not None:
+            # top-level declarations are either globals or function definitions
             self.take("int")
             name = self.take_ident()
             nxt = self.peek()
 
+            # distinguish function definitions from global declarations by looking for a "(" after the name
             if nxt == "(":
                 self.take("(")
                 params = self.parse_params()
@@ -243,6 +252,7 @@ class Parser:
         while True:
             by_ptr = False
 
+            # parameters are passed by pointer if they use C syntax with an asterisk, e.g. int *x
             self.take("int")
             if self.peek() == "*":
                 self.take("*")
@@ -251,6 +261,7 @@ class Parser:
 
             params.append(Param(name=name, by_ptr=by_ptr))
 
+            # parameters are separated by commas, but there is no trailing comma after the last parameter
             if self.peek() == ",":
                 self.take(",")
                 continue
@@ -258,6 +269,7 @@ class Parser:
 
         return params
 
+    # parse a block of statements enclosed in { }, returning a list of statement AST nodes
     def parse_block(self) -> List[Stmt]:
         self.take("{")
         out: List[Stmt] = []
@@ -267,6 +279,7 @@ class Parser:
         return out
 
     def finish_decl_after_name(self, name: str, allow_init: bool, require_semi: bool = True) -> VarDecl:
+        # handle array declarations like int a[10]; which require a size but don't allow initializers
         if self.peek() == "[":
             self.take("[")
             size_tok = self.take()
@@ -280,21 +293,25 @@ class Parser:
                 self.take(";")
             return VarDecl(name=name, size=size)
 
+        # handle scalar declarations like int x; or int x = expression; which allow optional initializers but don't require a size
         init: Optional[Expr] = None
         if allow_init and self.peek() == "=":
             self.take("=")
             init = self.parse_expr()
 
+        # require a semicolon after the declaration unless this is part of a for loop initializer, which allows an optional semicolon instead
         if require_semi:
             self.take(";")
         return VarDecl(name=name, size=1, init=init)
 
+    # parse different types of statements
     def parse_decl_stmt(self, require_semi: bool = True) -> Stmt:
         self.take("int")
         name = self.take_ident()
         decl = self.finish_decl_after_name(name, allow_init=True, require_semi=require_semi)
         return Stmt(kind="decl", decl=decl)
 
+    # parse left-hand side of an assignment
     def parse_lvalue(self) -> tuple[str, Optional[Expr]]:
         name = self.take_ident()
         idx: Optional[Expr] = None
@@ -304,6 +321,7 @@ class Parser:
             self.take("]")
         return name, idx
 
+    # parse an assignment statement
     def parse_assign_stmt(self, require_semi: bool) -> Stmt:
         name, idx = self.parse_lvalue()
         self.take("=")
@@ -312,6 +330,7 @@ class Parser:
             self.take(";")
         return Stmt(kind="assign", assign=Assign(target_name=name, target_index=idx, expr=expr))
 
+    # parse an assignment through pointer dereference, e.g. *x = expr; which writes through the pointer stored in x
     def parse_deref_assign_stmt(self, require_semi: bool) -> Stmt:
         self.take("*")
         name = self.take_ident()
@@ -321,6 +340,7 @@ class Parser:
             self.take(";")
         return Stmt(kind="assign", assign=Assign(target_name=name, target_index=None, expr=expr, target_deref=True))
 
+    # parse a function call statement
     def parse_call_stmt(self, require_semi: bool) -> Stmt:
         call_expr = self.parse_postfix(Expr(kind="var", name=self.take_ident()))
         if call_expr.kind != "call":
@@ -329,14 +349,17 @@ class Parser:
             self.take(";")
         return Stmt(kind="expr", expr=call_expr)
 
+    # parse conditions in if/while/for statements, which can be either binary comparisons or bare expressions treated as != 0
     def parse_condition(self) -> Cond:
         left = self.parse_expr()
         if self.peek() in REL_OPS:
             op = self.take()
             right = self.parse_expr()
             return Cond(left=left, op=op, right=right)
-        return Cond(left=left, op="!=", right=Expr(kind="num", value=0))  # bare expression: implicitly test expr != 0
+        # bare expressions in conditions are treated as expr != 0
+        return Cond(left=left, op="!=", right=Expr(kind="num", value=0))
 
+    # parse the initializer part of a for loop
     def parse_for_init(self) -> Optional[Stmt]:
         if self.peek() == ";":
             return None
@@ -344,6 +367,7 @@ class Parser:
             return self.parse_decl_stmt(require_semi=False)
         return self.parse_assign_stmt(require_semi=False)
 
+    # parse a general statement
     def parse_stmt(self) -> Stmt:
         tok = self.peek()
 
@@ -407,7 +431,7 @@ class Parser:
         if not re.fullmatch(r"[A-Za-z_]\w*", tok):
             raise SyntaxError(f"Unexpected token in statement: {tok!r}")
 
-        # Distinguish assignment vs call statement.
+        # distinguish assignment statements from call statements
         if self.peek_n(1) == "(":
             return self.parse_call_stmt(require_semi=True)
         return self.parse_assign_stmt(require_semi=True)
@@ -450,13 +474,14 @@ class Parser:
             name = self.take_ident()
             return Expr(kind="deref", name=name)
         if self.peek() == "&":
-            # address-of: &x yields the address of x (used to pass pointer arguments)
-            # Note: binary & is consumed by parse_and before reaching here.
+            # address-of: &x yields the address of x for pointer arguments
+            # note: binary & is consumed by parse_and before reaching here
             self.take("&")
             name = self.take_ident()
             return Expr(kind="addr_of", name=name)
         return self.parse_primary()
 
+    # parse primary expressions
     def parse_primary(self) -> Expr:
         tok = self.peek()
         if tok is None:
@@ -478,6 +503,7 @@ class Parser:
 
         raise SyntaxError(f"Unexpected token in expression: {tok!r}")
 
+    # parse postfix expressions
     def parse_postfix(self, base: Expr) -> Expr:
         out = base
         while True:
@@ -558,12 +584,14 @@ class IRGen:
         self.label_counters: Dict[str, int] = {"if": 0, "while": 0, "for": 0}
         self.current_fn = ""
 
+    # generate a new temporary variable name for holding intermediate values during expression lowering
     def new_temp(self) -> str:
         name = f"t{self.temp_counter}"
         self.temp_counter += 1
         self.temps.append(name)
         return name
 
+    # generate a new unique label ID for control flow structures
     def new_struct_id(self, kind: str) -> int:
         self.label_counters[kind] += 1
         return self.label_counters[kind]
@@ -636,8 +664,8 @@ class IRGen:
 
     def emit_expr_to(self, expr: Expr, dst: str) -> None:
         """Lower an expression directly into a known scalar destination when safe."""
-        # This avoids pointless temps for simple code like "c = a + b" while
-        # still using emit_expr for nested subtrees that must be preserved.
+        # avoid pointless temps for simple code like "c = a + b" while still
+        # using emit_expr for nested subtrees that must be preserved
         if expr.kind == "num":
             self.emit(IRInstr(op="store", name=dst, src=expr.value or 0))
             return
@@ -693,14 +721,14 @@ class IRGen:
             if st.assign is None:
                 return
             if st.assign.target_deref:
-                # *x = expr: write through the pointer stored in x
+                # *x = expr writes through the pointer stored in x
                 value = self.emit_expr(st.assign.expr)
                 self.emit(IRInstr(op="deref_store", name=st.assign.target_name, src=value))
             elif st.assign.target_index is None:
                 self.emit_expr_to(st.assign.expr, st.assign.target_name)
             else:
-                # For stores through computed addresses, preserve the RHS first;
-                # address calculation is allowed to use the normal scratch regs.
+                # for stores through computed addresses, preserve the rhs first;
+                # address calculation can use the normal scratch registers
                 value = self.emit_expr(st.assign.expr)
                 index = self.emit_expr(st.assign.target_index)
                 self.emit(IRInstr(op="store_array", name=st.assign.target_name, index=index, src=value))
@@ -776,8 +804,9 @@ class IRGen:
 
         raise ValueError(f"Unsupported statement kind: {st.kind}")
 
+    # determine whether a statement guarantees that the function will return, which is used to decide whether to emit an implicit "return 0" at the end of a function that doesn't have an explicit return in all control flow paths
     def stmt_guarantees_return(self, st: Stmt) -> bool:
-        # used to decide whether an implicit "return 0" is needed at function end
+        # decide whether an implicit "return 0" is needed at function end
         if st.kind == "return":
             return True
         if st.kind == "block":
@@ -790,6 +819,7 @@ class IRGen:
             return self.block_guarantees_return(then_body) and self.block_guarantees_return(else_body)
         return False
 
+    # a block guarantees return if any of its statements guarantee return, which is used to determine whether an implicit "return 0" is needed at the end of a function
     def block_guarantees_return(self, body: List[Stmt]) -> bool:
         for st in body:
             if self.stmt_guarantees_return(st):
@@ -834,12 +864,12 @@ class CodeGen:
         self.func_symbols: Dict[str, Dict[str, SymbolInfo]] = {}
         self.func_by_name: Dict[str, Function] = {}
 
-        # Data layout entries in emission order.
+        # data layout entries in emission order
         self.data_entries: List[tuple[str, int | str]] = []
         self.data_seen: set[str] = set()
         self.data_index: Dict[str, int] = {}
 
-        # Label-address helpers for pointer math.
+        # label-address helpers for pointer math
         self.addr_helpers: Dict[str, str] = {}
         self.fn_needs_saved_r7: Dict[str, bool] = {}
 
@@ -848,7 +878,7 @@ class CodeGen:
 
     def add_data_word(self, label: str, value: int | str = 0) -> None:
         if label in self.data_seen:
-            return  # deduplication: addr_helpers may re-request an already-allocated label
+            return  # deduplicate addr helpers that re-request an existing label
         self.data_seen.add(label)
         self.data_index[label] = len(self.data_entries)
         self.data_entries.append((label, value))
@@ -865,12 +895,12 @@ class CodeGen:
             self.add_data_word(f"{base_label}_{i}", init)
 
     def addr_helper_label(self, target_label: str) -> str:
-        # The ISA has no PC-relative data addressing; to load a label's address
-        # into a register, emit a .word holding the address and load that pointer word.
+        # the isa has no pc-relative data addressing, so load label addresses
+        # through helper words stored in .data
         if target_label not in self.addr_helpers:
             helper = f"addr_{target_label}"
             self.addr_helpers[target_label] = helper
-            self.add_data_word(helper, target_label)  # .word pointing at target_label itself
+            self.add_data_word(helper, target_label)  # .word pointing at the target label
         return self.addr_helpers[target_label]
 
     def require_fields(self, instr: IRInstr, *fields: str) -> List[object]:
@@ -934,8 +964,8 @@ class CodeGen:
             self.func_symbols[fn.name] = local_map
 
             ir_fn = self.ir_by_name.get(fn.name)
-            # main exits via HALT so never needs r7 saved; other callers must save r7
-            # because JL overwrites it with the return address of the outgoing call.
+            # main exits via halt and never needs r7 saved; other callers do
+            # because jl overwrites r7 with the outgoing return address
             self.fn_needs_saved_r7[fn.name] = fn.name != "main" and ir_fn is not None and any(
                 instr.op == "call" for instr in ir_fn.instrs
             )
@@ -955,9 +985,9 @@ class CodeGen:
             self.collect_stmt_decls(fn.name, local_map, fn.body)
 
             if ir_fn is not None:
-                # Temps are explicit storage slots for now. This keeps the
-                # backend simple on an ISA without an exposed stack pointer;
-                # later register allocation can replace selected temp loads.
+                # temps are explicit storage slots for now. This keeps the
+                # backend simple without an exposed stack pointer; later
+                # register allocation can replace selected temp loads
                 for temp in ir_fn.temps:
                     if temp in local_map:
                         raise NameError(f"Duplicate temporary in {fn.name}: {temp}")
@@ -1016,7 +1046,7 @@ class CodeGen:
 
         helper = self.addr_helper_label(info.label)
         self.emit(f"    LD    r5, {helper}(r0)")       # load base address of array
-        self.emit_load_operand(fn, index, "r2")        # load index
+        self.emit_load_operand(fn, index, "r2")        # load index value
         self.emit(f"    ADD   {target}, r5, r2")       # base + index = element address
 
     def emit_load_array_elem_value(self, fn: str, name: str, index: IRValue, target: str) -> None:
@@ -1070,7 +1100,7 @@ class CodeGen:
             slot = self.lookup_symbol(callee, p.name).label
             self.emit(f"    ST    r3, {slot}(r0)")
 
-        # Preserve r7 around the call: JL will overwrite it with the new return address.
+        # preserve r7 around nested calls because jl overwrites the link register
         if self.fn_needs_saved_r7.get(fn, False):
             saved_lbl = self.fn_saved_r7_label(fn)
             self.emit(f"    ST    r7, {saved_lbl}(r0)")
@@ -1118,7 +1148,7 @@ class CodeGen:
             dst, name = self.require_fields(instr, "dst", "name")
             info = self.lookup_symbol(fn, name)
             self.emit(f"    LD    r5, {info.label}(r0)")  # load pointer from slot
-            self.emit(f"    LD    r3, 0(r5)")             # dereference
+            self.emit(f"    LD    r3, 0(r5)")             # dereference through pointer
             self.emit_store_scalar(fn, dst, "r3")
             return
 
@@ -1175,7 +1205,7 @@ class CodeGen:
         self.collect_symbols(ir_prog)
 
         self.emit(".text")
-        self.emit(".global main")  # entry point for the assembler
+        self.emit(".global main")  # entry point expected by the assembler
         self.emit("")
 
         for fn in self.prog.functions:

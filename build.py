@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-build.py: C -> unified memory files for the custom ISA toolchain.
+build.py: Build script for 16-bit custom ISA.
+Description: Converts a C source file into an assembly string, then assembles that string into a unified memory image.
 Usage:
   python3 build.py <input.c> [output_base]
 
@@ -20,6 +21,9 @@ TEXT_BASE = 0
 UNIFIED_MEM_DEPTH = 1024
 
 
+# -----------------------------------------------------------------------------
+# 1) File Writers
+# -----------------------------------------------------------------------------
 def write_words_hex(path: str, words: list[int]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for w in words:
@@ -32,11 +36,14 @@ def write_words_bin(path: str, words: list[int]) -> None:
             f.write(f"{w:016b}\n")
 
 
+# -----------------------------------------------------------------------------
+# 2) Build Flow
+# -----------------------------------------------------------------------------
 def build(c_path: str, base: str | None = None) -> None:
     if base is None:
         base = os.path.splitext(c_path)[0]
 
-    # 1) Compile .c -> assembly string
+    # 1) compile .c -> assembly string
     with open(c_path, encoding="utf-8") as f:
         src = f.read()
     tokens = cc.lex(src)
@@ -47,7 +54,7 @@ def build(c_path: str, base: str | None = None) -> None:
     with open(asm_path, "w", encoding="utf-8") as f:
         f.write(asm)
 
-    # 2) Assemble -> unified memory image
+    # 2) assemble -> unified memory image
     parsed, sym = assemble.first_pass(asm.splitlines(), text_base=TEXT_BASE)
     mem = assemble.second_pass(parsed, sym, mem_depth=UNIFIED_MEM_DEPTH)
     write_words_hex(f"{base}.memh", mem)
@@ -58,10 +65,14 @@ def build(c_path: str, base: str | None = None) -> None:
     print(f"  {base}.memh / .memb")
 
 
+# -----------------------------------------------------------------------------
+# 3) CLI
+# -----------------------------------------------------------------------------
 def main() -> None:
     if len(sys.argv) not in (2, 3):
         print("usage: python3 build.py <input.c> [output_base]")
         sys.exit(1)
+
     c_path = sys.argv[1]
     base = sys.argv[2] if len(sys.argv) == 3 else None
     build(c_path, base)
