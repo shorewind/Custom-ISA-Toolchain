@@ -68,13 +68,53 @@ Project Director: Mr. Jackson Lawrence \\
 Department of Electrical \& Computer Engineering}
 
 \date{May 1, 2026}
+\renewcommand{\bibname}{References}
+
+\newcommand{\makehonorscapstonetitlepage}{
+\begin{titlepage}
+\thispagestyle{empty}
+\begin{center}
+\vspace*{1in}
+
+{\Large \textbf{Design and Implementation of a\\C Compiler and Assembler for a\\Custom 16-bit Instruction Set Architecture}\par}
+
+\vspace{1.25in}
+by\par
+\vspace{0.4in}
+{\Large Esther Shore\par}
+
+\vfill
+
+An Honors Capstone\par
+submitted in partial fulfillment of the requirements\par
+for the Honors Diploma\par
+by means of Capstone Course HON 499\par
+to\par
+The Honors College\par
+of\par
+The University of Alabama in Huntsville\par
+
+\vfill
+
+May 1, 2026\par
+
+\vspace{1in}
+\begin{flushleft}
+Approved by:\par
+Honors Capstone Project Director: Mr. Jackson Lawrence\par
+Department Chair: Dr. Aleksandar Milenkovic\par
+Honors College Dean: Dr. Keith Hollingsworth\par
+\end{flushleft}
+\end{center}
+\end{titlepage}
+}
 
 \begin{document}
 
-\maketitle
+\makehonorscapstonetitlepage
 \pagenumbering{roman}
 
-\begin{abstract}
+\chapter*{Abstract}
 This project develops a lightweight compiler and assembler for a restricted
 subset of C targeting a custom 16-bit instruction set architecture (ISA). The
 compiler translates source programs into assembly for the target processor,
@@ -89,7 +129,18 @@ oriented simulation. The completed system demonstrates that a small, focused
 toolchain is sufficient to translate nontrivial programs into executable
 machine code for an educational processor while making the relationship
 between high-level code and hardware execution explicit.
-\end{abstract}
+
+\chapter*{Acknowledgements}
+I thank my project director, Mr. Jackson Lawrence, for his guidance and
+feedback throughout this project. I also thank the faculty of the University
+of Alabama in Huntsville Department of Electrical and Computer Engineering
+for the education and instruction that made this work possible, as well as my dad
+for his unwavering belief and support. Artificial intelligence tools were used
+during the preparation of this report for design exploration, verification planning,
+editing, and formatting. These tools helped evaluate alternatives and check
+reasoning, but they did not determine the final design; all technical
+choices, implementation decisions, and final written content were reviewed and
+approved by the author.
 
 \tableofcontents
 \clearpage
@@ -116,7 +167,7 @@ restricted subset of C to that ISA.
 The toolchain consists of two major software components. The compiler
 translates C source into assembly for the custom ISA. The assembler resolves
 labels, encodes instructions, and emits a unified memory image in hexadecimal
-form for use with Verilog simulation. The design deliberately favors
+or binary form for use with Verilog simulation. The design deliberately favors
 correctness, transparency, and ease of debugging over aggressive optimization.
 Complex source expressions are lowered into explicit intermediate steps, and
 long-lived values are stored in named memory locations rather than kept in
@@ -136,7 +187,9 @@ generated programs. That custom 16-bit architecture was previously developed
 as a compact reduced instruction set computer (RISC)-style educational
 processor, where RISC-style refers to a small, regular instruction set
 with simple instruction formats and explicit load/store operations, along with
-a small register file and a limited but useful instruction set.
+a small register file and a limited but useful instruction set. The hardware
+repository for that processor is available at
+\href{https://github.com/shorewind/Custom-ISA}{github.com/shorewind/Custom-ISA}.
 
 The architecture is word-addressable and provides an address space of 1024
 16-bit words. Each instruction occupies exactly one 16-bit word. All values are
@@ -409,7 +462,7 @@ early with a syntax error.
 After parsing, the compiler lowers expressions into a simple linear
 intermediate representation (IR) similar to the TACKY style described in
 compiler-construction literature, particularly Nora Sandler's
-\textit{Writing a C Compiler}. Here, TACKY refers to a tiny abstract
+\textit{Writing a C Compiler}~\cite{ref:sandler}. Here, TACKY refers to a tiny abstract
 computer-like kernel representation in which complex expressions are broken
 into simple, ordered steps. The purpose of this layer is not
 optimization. Instead, it makes evaluation order explicit and prevents nested
@@ -1904,8 +1957,17 @@ compiler construction, instruction-set design, and hardware execution. It
 turns the ISA from an isolated hardware specification into a usable computing
 environment.
 
+\begin{thebibliography}{1}
+\addcontentsline{toc}{chapter}{References}
+
+\bibitem{ref:sandler}
+N.~Sandler, \emph{Writing a C Compiler}. San Francisco, CA, USA: No Starch
+Press, 2024.
+
+\end{thebibliography}
+
 \appendix
-\chapter{Appendix}
+\chapter{Source Listings and Supporting Artifacts}
 
 This appendix provides full copied source listings for the main software artifacts discussed in this report, along with selected simulation-support artifacts. For each file, a GitHub link is also provided so that the reader can compare the copied listing in this report against the current repository version.
 
@@ -1915,15 +1977,6 @@ The full project repository is available at:
 
 \begin{center}
 \url{https://github.com/shorewind/Custom-ISA-Toolchain}
-\end{center}
-
-\section{Additional Reference}
-
-The discussion of the TACKY-style intermediate representation in this report
-is informed by the following compiler text:
-
-\begin{center}
-Nora Sandler, \textit{Writing a C Compiler}, No Starch Press, 2024.
 \end{center}
 
 \section{Simulation Artifacts}
